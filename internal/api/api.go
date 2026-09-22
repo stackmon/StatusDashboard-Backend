@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -13,13 +15,15 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/db"
 )
 
+// oidcDiscoveryTimeout bounds the provider discovery and JWKS check at startup.
+const oidcDiscoveryTimeout = 15 * time.Second
+
 type API struct {
-	r           *gin.Engine
-	db          *db.DB
-	log         *zap.Logger
-	oa2Prov     *auth.Provider
-	secretKeyV1 string
-	rbac        *rbac.Service
+	r     *gin.Engine
+	db    *db.DB
+	log   *zap.Logger
+	authn *auth.Authenticator
+	rbac  *rbac.Service
 }
 
 func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
@@ -27,15 +31,15 @@ func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	var oa2Prov *auth.Provider
-	if cfg.Keycloak != nil && cfg.Keycloak.URL != "" {
-		var err error
-		if oa2Prov, err = auth.NewProvider(
-			cfg.Keycloak.URL, cfg.Keycloak.Realm, cfg.Keycloak.ClientID,
-			cfg.Keycloak.ClientSecret, cfg.Hostname, cfg.WebURL,
-		); err != nil {
-			return nil, fmt.Errorf("could not initialise the OAuth provider, err: %w", err)
-		}
+	rbacService := rbac.New(rbac.Config{
+		Creators:  cfg.RBAC.Creators,
+		Operators: cfg.RBAC.Operators,
+		Admins:    cfg.RBAC.Admins,
+	})
+
+	authn, err := newAuthenticator(cfg, rbacService.RoleNames())
+	if err != nil {
+		return nil, err
 	}
 
 	r := gin.New()
@@ -44,20 +48,40 @@ func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
 	r.Use(CORSMiddleware())
 	r.NoRoute(errors.Return404)
 
-	rbacService := rbac.New(cfg.RBAC.Creators, cfg.RBAC.Operators, cfg.RBAC.Admins)
-
 	a := &API{
-		r:           r,
-		db:          database,
-		log:         log,
-		oa2Prov:     oa2Prov,
-		secretKeyV1: cfg.SecretKeyV1,
-		rbac:        rbacService,
+		r:     r,
+		db:    database,
+		log:   log,
+		authn: authn,
+		rbac:  rbacService,
 	}
-	if err := a.InitRoutes(cfg.OpenAPISpecPath); err != nil {
+	if err = a.InitRoutes(cfg.OpenAPISpecPath); err != nil {
 		return nil, fmt.Errorf("init routes: %w", err)
 	}
 	return a, nil
+}
+
+// newAuthenticator builds the token authenticator from the configured providers.
+func newAuthenticator(cfg *conf.Config, roleNames []string) (*auth.Authenticator, error) {
+	if cfg.OIDC == nil || cfg.OIDC.Issuer == "" {
+		return auth.NewAuthenticator(nil, cfg.SecretKeyV1), nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), oidcDiscoveryTimeout)
+	defer cancel()
+
+	provider, err := auth.NewProvider(ctx, auth.ProviderConfig{
+		Issuer:        cfg.OIDC.Issuer,
+		ClientID:      cfg.OIDC.ClientID,
+		RolesClaim:    cfg.OIDC.RolesClaim,
+		RoleNames:     roleNames,
+		UsernameClaim: cfg.OIDC.UsernameClaim,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("could not initialise the OIDC provider: %w", err)
+	}
+
+	return auth.NewAuthenticator(provider, cfg.SecretKeyV1), nil
 }
 
 func (a *API) Router() *gin.Engine {

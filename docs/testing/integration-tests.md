@@ -26,7 +26,7 @@ golangci-lint run ./tests/
 | File | Lines | Purpose |
 |------|------:|---------|
 | `main_test.go` | 289 | `TestMain` (testcontainers bootstrap), `initTests`, route initialisation with production RBAC middleware, DB helpers (`truncateIncidents`, `restoreFixtureIncident`) |
-| `rbac_helpers_test.go` | 278 | HMAC JWT signing (`testHMACSecret`), `tokenForRole`, pre-built tokens (`adminToken`, `operatorToken`, `creatorToken`), group constants, HTTP request helpers, event factory functions |
+| `rbac_helpers_test.go` | 278 | HMAC JWT signing (`testHMACSecret`), `tokenForRole`, pre-built tokens (`adminToken`, `operatorToken`, `creatorToken`), role constants, HTTP request helpers, event factory functions |
 | `dump_test.sql` | — | Fixture data: 6 components (CCE, ECS, DCS × EU-DE/EU-NL), 1 resolved incident |
 
 ---
@@ -240,15 +240,15 @@ Tests verify that each role can only perform the actions allowed by the
 |---|----------------|----------|----------|----------|
 | 1 | `POST returns 401` | Token signed with wrong HMAC key | 401 | FR-026 |
 | 2 | `PATCH returns 401` | Token signed with wrong HMAC key | 401 | FR-026 |
-| 3 | `InvalidGroupsClaim` | Token with non-array groups claim | 403 | FR-002 |
-| 4 | `ValidClaimsSucceeds` | Token with valid groups and username | 201 | FR-002a |
+| 3 | `InvalidGroupsClaim` | Token with a non-array groups claim (local HMAC branch) | 403 | FR-002 |
+| 4 | `ValidClaimsSucceeds` | Token with valid roles and username (local HMAC branch) | 201 | FR-002a |
 
 ---
 
 ### 7. Admin-Only Configuration (`rbac_admin_only_test.go`)
 
 Tests verify correct behavior when only `SD_RBAC_GROUPS_ADMINS` is configured
-(creator and operator groups are empty strings).
+(creator and operator role names are empty strings).
 
 #### Admin CRUD — `TestAdminOnly_AdminCRUD`
 
@@ -353,8 +353,8 @@ test(s) that verify it.
 
 | Requirement | Description | Covered By |
 |-------------|-------------|------------|
-| FR-002 | Extract groups from JWT `groups` claim | `TestToken_InvalidGroupsClaim` |
-| FR-002a | Map IdP groups via SD_RBAC_GROUPS_* env vars | `TestToken_ValidClaimsSucceeds` |
+| FR-002 | Extract roles from the JWT token | `TestToken_InvalidGroupsClaim` |
+| FR-002a | Map role names via SD_RBAC_GROUPS_* env vars | `TestToken_ValidClaimsSucceeds` |
 | FR-004 | Creator can create maintenance events | `TestCreation_RoleInitialStatus` |
 | FR-005 | Creator → pending_review initial status | `TestCreation_RoleInitialStatus/creator_creates_maintenance_with_pending_review_status` |
 | FR-005a | Operator → planned initial status | `TestCreation_RoleInitialStatus/operator_creates_maintenance_with_planned_status` |
@@ -428,7 +428,7 @@ or future test additions):
 
 ## Unit Test Coverage
 
-Unit tests run without external dependencies (no database, no Keycloak).
+Unit tests run without external dependencies (no database, no identity provider).
 
 **Run command:**
 
@@ -440,7 +440,7 @@ go test ./internal/... -count=1
 
 | Package | Coverage | Key Test Files |
 |---------|----------|---------------|
-| `internal/conf` | 74.5% | `conf_test.go` — Validate, MinSecretKeyLength, PortValidation, FillDefaults, maskSecret, sanitizeDBString, mergeConfigs, Log |
-| `internal/api` | 53.5% | `middleware_test.go` — parseToken (HMAC/RSA), AuthenticationMW, SetJWTClaims, RBAC authorization, validateAudience, idpTypeFromMethod, authAudit |
-| `internal/api/rbac` | 100% | `rbac_test.go` — HasAuthorizedGroup, role resolution |
-| `internal/api/auth` | 76.5% | `auth_test.go` — ClientID, PutGetToken, LoginHandler, TokenHandler, LogoutHandler, RefreshHandler, PublicKey caching, retry with backoff, all-retries-fail; `storage_test.go` — CRUD, overwrite, concurrent access |
+| `internal/conf` | 72.9% | `conf_test.go` — Validate, MinSecretKeyLength, PortValidation, FillDefaults, maskSecret, sanitizeDBString, mergeConfigs, Log |
+| `internal/api` | 49.6% | `middleware_test.go` — OIDC and HMAC verification, AuthenticationMW, SetJWTClaims, RBAC authorization |
+| `internal/api/rbac` | 100% | `rbac_test.go` — HasAuthorizedRole, role resolution, role names |
+| `internal/api/auth` | 92.4% | `auth_test.go` — HMAC and OIDC verification dispatch, signing method selection; `oidc_test.go` — discovery, JWKS caching, roles claim extraction, token validation |

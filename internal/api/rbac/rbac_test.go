@@ -6,74 +6,78 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func testConfig(creators, operators, admins string) Config {
+	return Config{Creators: creators, Operators: operators, Admins: admins}
+}
+
 func TestService_Resolve(t *testing.T) {
-	svc := New("sd_creators", "sd_operators", "sd_admins")
+	svc := New(testConfig("sd_creators", "sd_operators", "sd_admins"))
 
 	tests := []struct {
 		name     string
-		groups   []string
+		roles    []string
 		expected Role
 	}{
 		{
-			name:     "Empty groups list returns NoRole",
-			groups:   []string{},
+			name:     "Empty roles list returns NoRole",
+			roles:    []string{},
 			expected: NoRole,
 		},
 		{
-			name:     "Unrecognized group returns NoRole",
-			groups:   []string{"some_random_group"},
+			name:     "Unrecognized role returns NoRole",
+			roles:    []string{"some_random_role"},
 			expected: NoRole,
 		},
 		{
-			name:     "Creator group returns Creator role",
-			groups:   []string{"sd_creators"},
+			name:     "Creator role returns Creator",
+			roles:    []string{"sd_creators"},
 			expected: Creator,
 		},
 		{
-			name:     "Operator group returns Operator role",
-			groups:   []string{"sd_operators"},
+			name:     "Operator role returns Operator",
+			roles:    []string{"sd_operators"},
 			expected: Operator,
 		},
 		{
-			name:     "Admin group returns Admin role",
-			groups:   []string{"sd_admins"},
+			name:     "Admin role returns Admin",
+			roles:    []string{"sd_admins"},
 			expected: Admin,
 		},
 		{
 			name:     "Multiple roles: Operator supersedes Creator",
-			groups:   []string{"sd_creators", "sd_operators"},
+			roles:    []string{"sd_creators", "sd_operators"},
 			expected: Operator,
 		},
 		{
 			name:     "Multiple roles: Admin supersedes Operator",
-			groups:   []string{"sd_operators", "sd_admins"},
+			roles:    []string{"sd_operators", "sd_admins"},
 			expected: Admin,
 		},
 		{
 			name:     "Multiple roles: Admin supersedes all",
-			groups:   []string{"sd_creators", "sd_operators", "sd_admins"},
+			roles:    []string{"sd_creators", "sd_operators", "sd_admins"},
 			expected: Admin,
 		},
 		{
-			name:     "Group normalization: handles leading slash for Creator",
-			groups:   []string{"/sd_creators"},
+			name:     "Role normalization: handles leading slash for Creator",
+			roles:    []string{"/sd_creators"},
 			expected: Creator,
 		},
 		{
-			name:     "Group normalization: handles leading slash for Admin",
-			groups:   []string{"/sd_admins"},
+			name:     "Role normalization: handles leading slash for Admin",
+			roles:    []string{"/sd_admins"},
 			expected: Admin,
 		},
 		{
-			name:     "Mixed normalized and raw groups",
-			groups:   []string{"/sd_creators", "sd_operators"},
+			name:     "Mixed normalized and raw roles",
+			roles:    []string{"/sd_creators", "sd_operators"},
 			expected: Operator,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := svc.ResolveRole(tt.groups)
+			got := svc.ResolveRole(tt.roles)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
@@ -126,93 +130,93 @@ func TestRole_Permissions(t *testing.T) {
 	}
 }
 
-func TestService_HasAnyConfiguredGroup(t *testing.T) {
-	svc := New("sd_creators", "sd_operators", "sd_admins")
+func TestService_HasAuthorizedRole(t *testing.T) {
+	svc := New(testConfig("sd_creators", "sd_operators", "sd_admins"))
 
 	tests := []struct {
 		name     string
-		groups   []string
+		roles    []string
 		expected bool
 	}{
 		{
-			name:     "Empty groups list returns false",
-			groups:   []string{},
+			name:     "Empty roles list returns false",
+			roles:    []string{},
 			expected: false,
 		},
 		{
-			name:     "Unrecognized group returns false",
-			groups:   []string{"some_random_group"},
+			name:     "Unrecognized role returns false",
+			roles:    []string{"some_random_role"},
 			expected: false,
 		},
 		{
-			name:     "Creator group returns true",
-			groups:   []string{"sd_creators"},
+			name:     "Creator role returns true",
+			roles:    []string{"sd_creators"},
 			expected: true,
 		},
 		{
-			name:     "Operator group returns true",
-			groups:   []string{"sd_operators"},
+			name:     "Operator role returns true",
+			roles:    []string{"sd_operators"},
 			expected: true,
 		},
 		{
-			name:     "Admin group returns true",
-			groups:   []string{"sd_admins"},
+			name:     "Admin role returns true",
+			roles:    []string{"sd_admins"},
 			expected: true,
 		},
 		{
-			name:     "Group normalization: handles leading slash",
-			groups:   []string{"/sd_creators"},
+			name:     "Role normalization: handles leading slash",
+			roles:    []string{"/sd_creators"},
 			expected: true,
 		},
 		{
-			name:     "Mixed recognized and unrecognized groups",
-			groups:   []string{"random", "other", "sd_operators"},
+			name:     "Mixed recognized and unrecognized roles",
+			roles:    []string{"random", "other", "sd_operators"},
 			expected: true,
 		},
 		{
-			name:     "Only unrecognized groups",
-			groups:   []string{"random", "other", "unknown"},
+			name:     "Only unrecognized roles",
+			roles:    []string{"random", "other", "unknown"},
 			expected: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := svc.HasAuthorizedGroup(tt.groups)
+			got := svc.HasAuthorizedRole(tt.roles)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
 }
 
-func TestService_HasAnyConfiguredGroup_EmptyConfig(t *testing.T) {
-	svc := New("", "", "")
+func TestService_HasAuthorizedRole_EmptyConfig(t *testing.T) {
+	svc := New(testConfig("", "", ""))
 
 	tests := []struct {
 		name     string
-		groups   []string
+		roles    []string
 		expected bool
 	}{
 		{
-			name:     "No groups configured, empty list returns false",
-			groups:   []string{},
+			name:     "No roles configured, empty list returns false",
+			roles:    []string{},
 			expected: false,
 		},
 		{
-			name:     "No groups configured, any group returns false",
-			groups:   []string{"sd_creators", "sd_admins"},
+			name:     "No roles configured, any role returns false",
+			roles:    []string{"sd_creators", "sd_admins"},
 			expected: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := svc.HasAuthorizedGroup(tt.groups)
+			got := svc.HasAuthorizedRole(tt.roles)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
 }
 
-func TestParseGroups(t *testing.T) {
+func TestParseRoles(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
@@ -224,110 +228,143 @@ func TestParseGroups(t *testing.T) {
 			expected: map[string]struct{}{},
 		},
 		{
-			name:     "single group",
+			name:     "single role",
 			input:    "sd_admins",
 			expected: map[string]struct{}{"sd_admins": {}},
 		},
 		{
-			name:     "comma-separated groups (Vault real case)",
-			input:    "sd-admins,status-dashboard",
-			expected: map[string]struct{}{"sd-admins": {}, "status-dashboard": {}},
+			name:     "comma-separated roles",
+			input:    "sd_admins,sd_readers",
+			expected: map[string]struct{}{"sd_admins": {}, "sd_readers": {}},
 		},
 		{
 			name:     "spaces around commas are trimmed",
-			input:    "sd_admins , status-dashboard",
-			expected: map[string]struct{}{"sd_admins": {}, "status-dashboard": {}},
+			input:    "sd_admins , sd_readers",
+			expected: map[string]struct{}{"sd_admins": {}, "sd_readers": {}},
 		},
 		{
-			name:     "leading slash in configured group is normalized",
-			input:    "/sd_admins,/status-dashboard",
-			expected: map[string]struct{}{"sd_admins": {}, "status-dashboard": {}},
+			name:     "leading slash in configured role is normalized",
+			input:    "/sd_admins,/sd_readers",
+			expected: map[string]struct{}{"sd_admins": {}, "sd_readers": {}},
 		},
 		{
 			name:     "empty entries from double commas are ignored",
-			input:    "sd_admins,,status-dashboard",
-			expected: map[string]struct{}{"sd_admins": {}, "status-dashboard": {}},
+			input:    "sd_admins,,sd_readers",
+			expected: map[string]struct{}{"sd_admins": {}, "sd_readers": {}},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseGroups(tt.input)
+			got := parseRoles(tt.input)
 			assert.Equal(t, tt.expected, got)
 		})
 	}
 }
 
-// TestService_CommaSeparatedConfig reproduces the real Vault scenario:
-// SD_RBAC_GROUPS_ADMINS="sd-admins,status-dashboard"
-// where Keycloak sends groups with a leading "/" prefix.
-func TestService_CommaSeparatedConfig(t *testing.T) {
-	// Mirrors Vault value: rbacgroupadmins = "sd-admins,status-dashboard"
-	svc := New("sd_creators", "sd_operators", "sd-admins,status-dashboard")
-
-	// Real token claims from preprod Keycloak (truncated for brevity)
-	keycloakGroups := []string{
-		"/argocd-admin",
-		"/backstage",
-		"/gitea-admin",
-		"/gitea-users",
-		"/grafana-admin",
-		"/status-dashboard",
-		"offline_access",
-		"uma_authorization",
-		"default-roles-eco",
+func TestService_RoleNames(t *testing.T) {
+	tests := []struct {
+		name     string
+		svc      *Service
+		expected []string
+	}{
+		{
+			name:     "returns the sorted union of configured role names",
+			svc:      New(testConfig("sd_creators", "sd_operators", "sd_admins")),
+			expected: []string{"sd_admins", "sd_creators", "sd_operators"},
+		},
+		{
+			name:     "splits comma-separated configurations",
+			svc:      New(testConfig("", "", "sd-admins,sd_readers")),
+			expected: []string{"sd-admins", "sd_readers"},
+		},
+		{
+			name:     "normalizes leading slashes",
+			svc:      New(testConfig("/sd_creators", "", "")),
+			expected: []string{"sd_creators"},
+		},
+		{
+			name:     "deduplicates names shared by several roles",
+			svc:      New(testConfig("shared", "shared", "shared")),
+			expected: []string{"shared"},
+		},
+		{
+			name:     "no configured roles yields an empty list",
+			svc:      New(testConfig("", "", "")),
+			expected: []string{},
+		},
 	}
 
-	t.Run("user with /status-dashboard is authorized", func(t *testing.T) {
-		assert.True(t, svc.HasAuthorizedGroup(keycloakGroups))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.svc.RoleNames())
+		})
+	}
+}
+
+// TestService_CommaSeparatedConfig reproduces the deployment scenario
+// SD_RBAC_GROUPS_ADMINS="sd-admins,sd_readers" where a single variable may hold
+// several project role keys.
+func TestService_CommaSeparatedConfig(t *testing.T) {
+	svc := New(testConfig("sd_creators", "sd_operators", "sd-admins,sd_readers"))
+
+	// Real token roles from preprod Zitadel (truncated for brevity)
+	zitadelRoles := []string{
+		"sd_readers",
+		"/sd-admins",
+		"gitea-users",
+	}
+
+	t.Run("user with sd-admins is authorized", func(t *testing.T) {
+		assert.True(t, svc.HasAuthorizedRole(zitadelRoles))
 	})
 
-	t.Run("user with /status-dashboard resolves to Admin", func(t *testing.T) {
-		assert.Equal(t, Admin, svc.ResolveRole(keycloakGroups))
+	t.Run("user with sd-admins resolves to Admin", func(t *testing.T) {
+		assert.Equal(t, Admin, svc.ResolveRole(zitadelRoles))
 	})
 
 	t.Run("user with /sd-admins also resolves to Admin", func(t *testing.T) {
-		assert.Equal(t, Admin, svc.ResolveRole([]string{"/sd-admins", "other-group"}))
+		assert.Equal(t, Admin, svc.ResolveRole([]string{"/sd-admins", "other-role"}))
 	})
 
-	t.Run("user without any matching group is denied", func(t *testing.T) {
-		assert.False(t, svc.HasAuthorizedGroup([]string{"/argocd-admin", "offline_access"}))
+	t.Run("user without any matching role is denied", func(t *testing.T) {
+		assert.False(t, svc.HasAuthorizedRole([]string{"gitea-admin", "some_other_role"}))
 	})
 }
 
 func TestService_Resolve_EmptyConfig(t *testing.T) {
-	svc := New("", "", "")
+	svc := New(testConfig("", "", ""))
 
 	tests := []struct {
 		name     string
-		groups   []string
+		roles    []string
 		expected Role
 	}{
 		{
-			name:     "No groups configured, empty list returns NoRole",
-			groups:   []string{},
+			name:     "No roles configured, empty list returns NoRole",
+			roles:    []string{},
 			expected: NoRole,
 		},
 		{
-			name:     "No groups configured, known names still return NoRole",
-			groups:   []string{"sd_creators", "sd_operators", "sd_admins"},
+			name:     "No roles configured, known names still return NoRole",
+			roles:    []string{"sd_creators", "sd_operators", "sd_admins"},
 			expected: NoRole,
 		},
 		{
-			name:     "No groups configured, slash-prefixed returns NoRole",
-			groups:   []string{"/"},
+			name:     "No roles configured, slash-prefixed returns NoRole",
+			roles:    []string{"/"},
 			expected: NoRole,
 		},
 		{
-			name:     "No groups configured, empty string group returns NoRole",
-			groups:   []string{""},
+			name:     "No roles configured, empty string role returns NoRole",
+			roles:    []string{""},
 			expected: NoRole,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := svc.ResolveRole(tt.groups)
+			got := svc.ResolveRole(tt.roles)
 			assert.Equal(t, tt.expected, got)
 		})
 	}

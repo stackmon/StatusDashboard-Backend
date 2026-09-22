@@ -17,10 +17,12 @@ const osPref = "SD"
 const DevelopMode = "devel"
 
 const (
-	DefaultWebURL          = "http://localhost:9000"
-	DefaultHostname        = "localhost"
 	DefaultPort            = "8000"
 	DefaultOpenAPISpecPath = "openapi.yaml"
+
+	// DefaultRolesClaim is the Zitadel claim carrying the project roles of the
+	// authenticated subject.
+	DefaultRolesClaim = "urn:zitadel:iam:org:project:roles"
 
 	// MinSecretKeyLength is the minimum required length for the HMAC secret key.
 	// HMAC-SHA256 requires at least 32 bytes for cryptographic strength.
@@ -34,18 +36,12 @@ type Config struct {
 	// Cache connection uri
 	// It can be redis format or internal
 	Cache string `envconfig:"CACHE"`
-	// Keycloak settings
-	Keycloak *Keycloak `envconfig:"KEYCLOAK"`
+	// OIDC settings of the external identity provider (Zitadel)
+	OIDC *OIDC `envconfig:"OIDC"`
 	// Log level for verbosity
 	LogLevel string `envconfig:"LOG_LEVEL"`
 	// App port
 	Port string `envconfig:"PORT"`
-	// Hostname for the app, used to generate a callback URL for keycloak
-	// Example: https://api.example.com
-	Hostname string `envconfig:"HOSTNAME"`
-	// Web URL for the app
-	// Example: https://web.example.com
-	WebURL string `envconfig:"WEB_URL"`
 	// Secret key for local HMAC authentication (dev, tests, service-to-service)
 	SecretKeyV1 string `envconfig:"SECRET_KEY"`
 	// OpenAPISpecPath is the filesystem path to the OpenAPI spec served at
@@ -66,11 +62,13 @@ type RBACConfig struct {
 	Admins string `envconfig:"GROUPS_ADMINS"`
 }
 
-type Keycloak struct {
-	URL          string `envconfig:"URL"`
-	Realm        string `envconfig:"REALM"`
-	ClientID     string `envconfig:"CLIENT_ID"`
-	ClientSecret string `envconfig:"CLIENT_SECRET"`
+// OIDC configures the external identity provider. ClientID is the audience the
+// resource server accepts: every token must be issued to that client.
+type OIDC struct {
+	Issuer        string `envconfig:"ISSUER"`
+	ClientID      string `envconfig:"CLIENT_ID"`
+	RolesClaim    string `envconfig:"ROLES_CLAIM"`
+	UsernameClaim string `envconfig:"USERNAME_CLAIM"`
 }
 
 func (c *Config) Validate() error {
@@ -95,13 +93,19 @@ func (c *Config) Validate() error {
 
 // validateProviders ensures at least one authentication provider is configured.
 func (c *Config) validateProviders() error {
-	hasKeycloak := c.Keycloak != nil && c.Keycloak.URL != "" && c.Keycloak.Realm != "" &&
-		c.Keycloak.ClientID != "" && c.Keycloak.ClientSecret != ""
+	hasIssuer := c.OIDC != nil && c.OIDC.Issuer != ""
+	hasClientID := c.OIDC != nil && c.OIDC.ClientID != ""
+
+	if hasIssuer != hasClientID {
+		return fmt.Errorf("SD_OIDC_ISSUER and SD_OIDC_CLIENT_ID must be configured together")
+	}
+
+	hasOIDC := hasIssuer && hasClientID
 	hasLocal := c.SecretKeyV1 != ""
 
-	if !hasKeycloak && !hasLocal {
+	if !hasOIDC && !hasLocal {
 		return fmt.Errorf("at least one authentication provider must be configured: " +
-			"set SD_KEYCLOAK_* for Keycloak or SD_SECRET_KEY for local HMAC")
+			"set SD_OIDC_ISSUER with SD_OIDC_CLIENT_ID for Zitadel or SD_SECRET_KEY for local HMAC")
 	}
 
 	if hasLocal && len(c.SecretKeyV1) < MinSecretKeyLength {
@@ -127,12 +131,8 @@ func (c *Config) FillDefaults() {
 		c.Port = DefaultPort
 	}
 
-	if c.Hostname == "" {
-		c.Hostname = DefaultHostname
-	}
-
-	if c.WebURL == "" {
-		c.WebURL = DefaultWebURL
+	if c.OIDC != nil && c.OIDC.RolesClaim == "" {
+		c.OIDC.RolesClaim = DefaultRolesClaim
 	}
 
 	if c.OpenAPISpecPath == "" {
@@ -194,7 +194,7 @@ func mergeConfigs(env map[string]string, obj any, prefix string) error { //nolin
 		field := t.Field(i)
 		value := v.Field(i)
 
-		// Handle pointer to struct (e.g., *Keycloak)
+		// Handle pointer to struct (e.g., *OIDC)
 		if value.Kind() == reflect.Ptr && value.Elem().Kind() == reflect.Struct {
 			envValueTag := field.Tag.Get(envConfigTag)
 			confPrefix := fmt.Sprintf("%s_%s", prefix, envValueTag)
@@ -265,13 +265,11 @@ func (c *Config) Log(logger *zap.Logger) {
 	logger.Info("Application starting with the following configuration:")
 
 	logger.Info("Endpoint configuration",
-		zap.String("hostname", c.Hostname),
 		zap.String("port", c.Port),
-		zap.String("web_url", c.WebURL),
 	)
 
 	logger.Info("Authentication configuration",
-		zap.Bool("keycloak_configured", c.Keycloak != nil && c.Keycloak.URL != ""),
+		zap.Bool("oidc_configured", c.OIDC != nil && c.OIDC.Issuer != ""),
 		zap.Bool("local_hmac_configured", c.SecretKeyV1 != ""),
 		zap.String("creators_group", c.RBAC.Creators),
 		zap.String("operators_group", c.RBAC.Operators),
@@ -286,12 +284,12 @@ func (c *Config) Log(logger *zap.Logger) {
 		zap.String("openapi_spec_path", c.OpenAPISpecPath),
 	)
 
-	if c.Keycloak != nil {
-		logger.Info("Keycloak configuration",
-			zap.String("url", c.Keycloak.URL),
-			zap.String("realm", c.Keycloak.Realm),
-			zap.String("client_id", c.Keycloak.ClientID),
-			zap.String("client_secret", maskSecret(c.Keycloak.ClientSecret)),
+	if c.OIDC != nil {
+		logger.Info("OIDC configuration",
+			zap.String("issuer", c.OIDC.Issuer),
+			zap.String("client_id", c.OIDC.ClientID),
+			zap.String("roles_claim", c.OIDC.RolesClaim),
+			zap.String("username_claim", c.OIDC.UsernameClaim),
 		)
 	}
 }

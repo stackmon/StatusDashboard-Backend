@@ -122,10 +122,6 @@ func filterGETPaths(paths map[string]interface{}) (map[string]interface{}, map[s
 	usedTags := make(map[string]struct{})
 
 	for path, methods := range paths {
-		if strings.HasPrefix(path, "/auth/") {
-			continue
-		}
-
 		methodMap, isMap := methods.(map[string]interface{})
 		if !isMap {
 			continue

@@ -2,17 +2,14 @@ package errors
 
 import "errors"
 
-var ErrAuthNotAuthenticated = errors.New("not authenticated")
-var ErrAuthTokenInvalid = errors.New("token invalid")
-var ErrAuthFailedLogout = errors.New("failed to logout")
-var ErrAuthForbidden = errors.New("access is denied")
-var ErrInsufficientRole = errors.New("insufficient role")
-
-var ErrAuthMissedStateParam = errors.New("state is not present in the query parameters")
-var ErrAuthValidateBase64State = errors.New("failed to decode state")
-var ErrAuthExchangeToken = errors.New("failed to exchange token")
-var ErrAuthWrongCodeVerifier = errors.New("failed to extract code verifier")
-var ErrAuthMissingDataForCodeVerifier = errors.New("missing data for code verifier")
-var ErrAuthMissingRefreshToken = errors.New("refresh token is missing")
-var ErrAuthFailedRefreshToken = errors.New("failed to refresh token")
-var ErrAuthExpiredRefreshToken = errors.New("refresh token has expired or is invalid")
+var (
+	// ErrAuthNotAuthenticated is returned when a protected endpoint is called
+	// without a usable bearer token.
+	ErrAuthNotAuthenticated = errors.New("not authenticated")
+	// ErrAuthTokenInvalid is returned when the bearer token cannot be verified.
+	ErrAuthTokenInvalid = errors.New("token invalid")
+	// ErrAuthForbidden is returned when the authenticated caller holds no
+	// role granting access to the endpoint.
+	ErrAuthForbidden    = errors.New("access is denied")
+	ErrInsufficientRole = errors.New("insufficient role")
+)

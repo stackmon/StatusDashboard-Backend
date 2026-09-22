@@ -11,8 +11,8 @@ covering creation rules, PATCH status transitions, and automatic checker transit
 Admin (50) > Operator (30) > Creator (10) > NoRole (0)
 ```
 
-Role names (`admin`, `operator`, `creator`) are abstract application roles resolved from IdP group
-names configured via `SD_RBAC_GROUPS_ADMINS`, `SD_RBAC_GROUPS_OPERATORS`, and `SD_RBAC_GROUPS_CREATORS`
+Role names (`admin`, `operator`, `creator`) are abstract application roles resolved from role names
+configured via `SD_RBAC_GROUPS_ADMINS`, `SD_RBAC_GROUPS_OPERATORS`, and `SD_RBAC_GROUPS_CREATORS`
 environment variables. See [rbac.md](rbac.md) for configuration details.
 
 ---

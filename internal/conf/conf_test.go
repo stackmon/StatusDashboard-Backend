@@ -16,7 +16,7 @@ func TestRBACConfig_Validate(t *testing.T) {
 		errSubstr string
 	}{
 		{
-			name: "All groups configured",
+			name: "All roles configured",
 			config: RBACConfig{
 				Creators:  "sd_creators",
 				Operators: "sd_operators",
@@ -38,7 +38,7 @@ func TestRBACConfig_Validate(t *testing.T) {
 			errSubstr: "SD_RBAC_GROUPS_ADMINS",
 		},
 		{
-			name: "Missing Admins but other groups set fails",
+			name: "Missing Admins but other roles set fails",
 			config: RBACConfig{
 				Creators:  "sd_creators",
 				Operators: "sd_operators",
@@ -99,18 +99,53 @@ func TestConfig_Validate_RequiresProvider(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name: "Keycloak provider passes",
+			name: "Zitadel OIDC provider passes",
 			cfg: Config{
 				Port: "8000",
-				Keycloak: &Keycloak{
-					URL:          "https://kc.example.com",
-					Realm:        "myrealm",
-					ClientID:     "client",
-					ClientSecret: "secret",
+				OIDC: &OIDC{
+					Issuer:   "https://zitadel.example.com",
+					ClientID: "status-dashboard",
 				},
 				RBAC: RBACConfig{Admins: "sd_admins"},
 			},
 			expectErr: false,
+		},
+		{
+			name: "Both providers configured passes",
+			cfg: Config{
+				Port:        "8000",
+				SecretKeyV1: "my-secret-key-that-is-32-chars!!", // 32 chars
+				OIDC: &OIDC{
+					Issuer:   "https://zitadel.example.com",
+					ClientID: "status-dashboard",
+				},
+				RBAC: RBACConfig{Admins: "sd_admins"},
+			},
+			expectErr: false,
+		},
+		{
+			name: "Issuer without client id fails",
+			cfg: Config{
+				Port: "8000",
+				OIDC: &OIDC{
+					Issuer: "https://zitadel.example.com",
+				},
+				RBAC: RBACConfig{Admins: "sd_admins"},
+			},
+			expectErr: true,
+			errSubstr: "SD_OIDC_ISSUER and SD_OIDC_CLIENT_ID",
+		},
+		{
+			name: "Client id without issuer fails",
+			cfg: Config{
+				Port: "8000",
+				OIDC: &OIDC{
+					ClientID: "status-dashboard",
+				},
+				RBAC: RBACConfig{Admins: "sd_admins"},
+			},
+			expectErr: true,
+			errSubstr: "SD_OIDC_ISSUER and SD_OIDC_CLIENT_ID",
 		},
 	}
 
@@ -218,23 +253,34 @@ func TestFillDefaults(t *testing.T) {
 
 		assert.Equal(t, DevelopMode, c.LogLevel)
 		assert.Equal(t, DefaultPort, c.Port)
-		assert.Equal(t, DefaultHostname, c.Hostname)
-		assert.Equal(t, DefaultWebURL, c.WebURL)
+		assert.Equal(t, DefaultOpenAPISpecPath, c.OpenAPISpecPath)
 	})
 
 	t.Run("preserves existing values", func(t *testing.T) {
 		c := &Config{
-			LogLevel: "info",
-			Port:     "9090",
-			Hostname: "api.example.com",
-			WebURL:   "https://web.example.com",
+			LogLevel:        "info",
+			Port:            "9090",
+			OpenAPISpecPath: "custom.yaml",
 		}
 		c.FillDefaults()
 
 		assert.Equal(t, "info", c.LogLevel)
 		assert.Equal(t, "9090", c.Port)
-		assert.Equal(t, "api.example.com", c.Hostname)
-		assert.Equal(t, "https://web.example.com", c.WebURL)
+		assert.Equal(t, "custom.yaml", c.OpenAPISpecPath)
+	})
+
+	t.Run("defaults the roles claim when OIDC is configured", func(t *testing.T) {
+		c := &Config{OIDC: &OIDC{Issuer: "https://zitadel.example.com"}}
+		c.FillDefaults()
+
+		assert.Equal(t, DefaultRolesClaim, c.OIDC.RolesClaim)
+	})
+
+	t.Run("keeps a custom roles claim", func(t *testing.T) {
+		c := &Config{OIDC: &OIDC{Issuer: "https://zitadel.example.com", RolesClaim: "roles"}}
+		c.FillDefaults()
+
+		assert.Equal(t, "roles", c.OIDC.RolesClaim)
 	})
 }
 
@@ -294,7 +340,7 @@ func TestMergeConfigs(t *testing.T) {
 	})
 
 	t.Run("fills empty string fields from env map", func(t *testing.T) {
-		c := &Config{Keycloak: &Keycloak{}}
+		c := &Config{OIDC: &OIDC{}}
 		env := map[string]string{
 			"SD_DB":        "postgresql://localhost/test",
 			"SD_LOG_LEVEL": "info",
@@ -306,7 +352,7 @@ func TestMergeConfigs(t *testing.T) {
 	})
 
 	t.Run("does not overwrite existing values", func(t *testing.T) {
-		c := &Config{DB: "existing", Keycloak: &Keycloak{}}
+		c := &Config{DB: "existing", OIDC: &OIDC{}}
 		env := map[string]string{
 			"SD_DB": "overwritten",
 		}
@@ -316,7 +362,7 @@ func TestMergeConfigs(t *testing.T) {
 	})
 
 	t.Run("merges into embedded struct (RBACConfig)", func(t *testing.T) {
-		c := &Config{Keycloak: &Keycloak{}}
+		c := &Config{OIDC: &OIDC{}}
 		env := map[string]string{
 			"SD_RBAC_GROUPS_ADMINS": "my-admins",
 		}
@@ -325,28 +371,26 @@ func TestMergeConfigs(t *testing.T) {
 		assert.Equal(t, "my-admins", c.RBAC.Admins)
 	})
 
-	t.Run("merges into pointer struct (Keycloak)", func(t *testing.T) {
-		kc := &Keycloak{}
-		c := &Config{Keycloak: kc}
+	t.Run("merges into pointer struct (OIDC)", func(t *testing.T) {
+		oidcCfg := &OIDC{}
+		c := &Config{OIDC: oidcCfg}
 		env := map[string]string{
-			"SD_KEYCLOAK_URL":   "http://kc.local",
-			"SD_KEYCLOAK_REALM": "test",
+			"SD_OIDC_ISSUER":    "https://zitadel.example.com",
+			"SD_OIDC_CLIENT_ID": "status-dashboard",
 		}
 		err := mergeConfigs(env, c, "SD")
 		require.NoError(t, err)
-		assert.Equal(t, "http://kc.local", c.Keycloak.URL)
-		assert.Equal(t, "test", c.Keycloak.Realm)
+		assert.Equal(t, "https://zitadel.example.com", c.OIDC.Issuer)
+		assert.Equal(t, "status-dashboard", c.OIDC.ClientID)
 	})
 }
 
 func TestConfig_Log(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 
-	t.Run("logs without keycloak", func(t *testing.T) {
+	t.Run("logs without OIDC", func(t *testing.T) {
 		c := &Config{
-			Hostname:    "localhost",
 			Port:        "8000",
-			WebURL:      "http://localhost:9000",
 			SecretKeyV1: "secret-key-that-is-32-chars-long",
 			DB:          "postgresql://user:pass@localhost:5432/db",
 			LogLevel:    "devel",
@@ -355,20 +399,18 @@ func TestConfig_Log(t *testing.T) {
 		assert.NotPanics(t, func() { c.Log(logger) })
 	})
 
-	t.Run("logs with keycloak", func(t *testing.T) {
+	t.Run("logs with OIDC", func(t *testing.T) {
 		c := &Config{
-			Hostname:    "localhost",
 			Port:        "8000",
-			WebURL:      "http://localhost:9000",
 			SecretKeyV1: "secret-key-that-is-32-chars-long",
 			DB:          "postgresql://localhost:5432/db",
 			LogLevel:    "devel",
 			RBAC:        RBACConfig{Admins: "admins"},
-			Keycloak: &Keycloak{
-				URL:          "http://kc.local",
-				Realm:        "test",
-				ClientID:     "client",
-				ClientSecret: "secret",
+			OIDC: &OIDC{
+				Issuer:        "https://zitadel.example.com",
+				ClientID:      "status-dashboard",
+				RolesClaim:    DefaultRolesClaim,
+				UsernameClaim: "preferred_username",
 			},
 		}
 		assert.NotPanics(t, func() { c.Log(logger) })

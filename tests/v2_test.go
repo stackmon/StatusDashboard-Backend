@@ -33,7 +33,7 @@ type V2IncidentsListResponse struct {
 
 func TestV2GetIncidentsHandler(t *testing.T) {
 	t.Logf("start to test GET %s", v2IncidentsEndpoint)
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// Clean up and create a known incident for this test
 	truncateIncidents(t)
@@ -90,7 +90,7 @@ func TestV2GetIncidentsHandler(t *testing.T) {
 
 func TestV2GetComponentsHandler(t *testing.T) {
 	t.Log("start to test GET /v2/components")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	var response = `[{"id":1,"name":"Cloud Container Engine","attributes":[{"name":"region","value":"EU-DE"},{"name":"category","value":"Container"},{"name":"type","value":"cce"}]},{"id":2,"name":"Cloud Container Engine","attributes":[{"name":"region","value":"EU-NL"},{"name":"category","value":"Container"},{"name":"type","value":"cce"}]},{"id":3,"name":"Elastic Cloud Server","attributes":[{"name":"region","value":"EU-DE"},{"name":"category","value":"Compute"},{"name":"type","value":"ecs"}]},{"id":4,"name":"Elastic Cloud Server","attributes":[{"name":"region","value":"EU-NL"},{"name":"category","value":"Compute"},{"name":"type","value":"ecs"}]},{"id":5,"name":"Distributed Cache Service","attributes":[{"name":"region","value":"EU-DE"},{"name":"category","value":"Database"},{"name":"type","value":"dcs"}]},{"id":6,"name":"Distributed Cache Service","attributes":[{"name":"region","value":"EU-NL"},{"name":"category","value":"Database"},{"name":"type","value":"dcs"}]}]`
 
@@ -105,7 +105,7 @@ func TestV2GetComponentsHandler(t *testing.T) {
 
 func TestV2PostIncidentsHandlerNegative(t *testing.T) {
 	t.Log("start to test incident creation and check json data for /v2/incidents")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	type testCase struct {
 		ExpectedCode int
@@ -226,7 +226,7 @@ func TestV2PostIncidentsHandlerNegative(t *testing.T) {
 func TestV2PostIncidentsDescriptionLengthLimits(t *testing.T) {
 	t.Log("start to test description length limits for /v2/incidents")
 	truncateIncidents(t)
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	impact := 1
 	system := false
@@ -273,7 +273,7 @@ func TestV2PostIncidentsDescriptionLengthLimits(t *testing.T) {
 
 func TestV2PostIncidentsHandler(t *testing.T) {
 	t.Log("start to test incident creation for /v2/incidents")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	t.Log("check if all incidents have end date, if not, set it to start date + 1ms")
 	incidents := v2GetIncidents(t, r)
@@ -430,7 +430,7 @@ func TestV2PostIncidentsHandler(t *testing.T) {
 
 func TestV2PatchIncidentHandlerNegative(t *testing.T) {
 	t.Log("start to test negative cases for incident patching and check json data for /v2/incidents/42")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	components := []int{1}
 	impact := 1
@@ -534,7 +534,7 @@ func TestV2PatchIncidentHandlerNegative(t *testing.T) {
 
 func TestV2PatchIncidentHandler(t *testing.T) {
 	t.Log("start to test incident patching")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	components := []int{1}
 	impact := 1
@@ -651,7 +651,7 @@ func TestV2PatchIncidentHandler(t *testing.T) {
 
 func TestV2PostIncidentExtractHandler(t *testing.T) {
 	t.Log("start to test component extraction from incident for the endpoint /v2/incidents/42/extract")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	t.Log("check if all incidents have end date, if not, set it to start date + 1ms")
 	incidents := v2GetIncidents(t, r)
@@ -844,7 +844,7 @@ func v2PatchIncident(t *testing.T, r *gin.Engine, inc *v2.Incident, status ...ev
 
 func TestV2CreateComponentAndList(t *testing.T) {
 	t.Log("start to test component creation and listing")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// Test case 1: Successful component creation
 	t.Log("Test case 1: Create new component successfully")
@@ -904,7 +904,7 @@ func TestV2CreateComponentAndList(t *testing.T) {
 func TestV2GetIncidentsFilteredHandler(t *testing.T) {
 	t.Log("start to test GET /v2/incidents with filters")
 	truncateIncidents(t)
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	type filterTestCase struct {
 		name          string
@@ -1128,7 +1128,7 @@ func TestV2GetIncidentsFilteredHandler(t *testing.T) {
 
 func TestV2PostMaintenanceHandler(t *testing.T) {
 	t.Log("start to test maintenance creation for /v2/incidents")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	t.Log("create a maintenance")
 
@@ -1169,7 +1169,7 @@ func TestV2PostMaintenanceHandler(t *testing.T) {
 
 func TestV2PostInfoWithExistingEventsHandler(t *testing.T) {
 	t.Log("start to test 'info' incident creation when an 'incident' and a 'maintenance' for the same component already exist")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// 1. Preparation: Close any existing open incidents for a clean state.
 	incidentsBeforeTest := v2GetIncidents(t, r)
@@ -1298,7 +1298,7 @@ func TestV2PostInfoWithExistingEventsHandler(t *testing.T) {
 func TestV2GetComponentsAvailability(t *testing.T) {
 	truncateIncidents(t)
 	t.Logf("start to test GET %s", v2AvailabilityEndpoint)
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// Incident preparation
 	t.Log("create an incident")
@@ -1407,7 +1407,7 @@ func checkComponentAvailability(t *testing.T, compAvail v2.ComponentAvailability
 
 func TestV2PatchIncidentUpdateHandler(t *testing.T) {
 	t.Log("start to test PATCH /v2/incidents/:incidentID/updates/:updateID")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// Clean up database before test to ensure a clean state for this test case.
 	truncateIncidents(t)

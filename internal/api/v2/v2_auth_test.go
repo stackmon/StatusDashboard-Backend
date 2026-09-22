@@ -38,9 +38,9 @@ func TestCreatorFieldExposedToAuthenticated(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request, _ = http.NewRequest(http.MethodGet, "/v2/events", nil)
 
-	c.Set("userIDGroups", []string{"operators"})
+	c.Set("userIDRoles", []string{"operators"})
 
-	handler := GetEventsHandler(d, log, rbac.New("", "operators", ""))
+	handler := GetEventsHandler(d, log, rbac.New(rbac.Config{Operators: "operators"}))
 	handler(c)
 
 	assert.Equal(t, 200, w.Code)
@@ -69,7 +69,7 @@ func TestCreatorFieldHiddenFromUnauthenticated(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request, _ = http.NewRequest(http.MethodGet, "/v2/events", nil)
 
-	handler := GetEventsHandler(d, log, rbac.New("", "operators", ""))
+	handler := GetEventsHandler(d, log, rbac.New(rbac.Config{Operators: "operators"}))
 	handler(c)
 
 	assert.Equal(t, 200, w.Code)
@@ -99,7 +99,7 @@ func TestContactEmailHiddenFromUnauthenticated(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request, _ = http.NewRequest(http.MethodGet, "/v2/events", nil)
 
-	handler := GetEventsHandler(d, log, rbac.New("", "operators", ""))
+	handler := GetEventsHandler(d, log, rbac.New(rbac.Config{Operators: "operators"}))
 	handler(c)
 
 	assert.Equal(t, 200, w.Code)

@@ -32,7 +32,7 @@ type V2EventsListResponse struct {
 
 func TestV2PostEventsHandlerNegative(t *testing.T) {
 	t.Log("start to test incident creation and check json data for /v2/events")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	type testCase struct {
 		ExpectedCode int
@@ -152,7 +152,7 @@ func TestV2PostEventsHandlerNegative(t *testing.T) {
 
 func TestV2PostEventsHandler(t *testing.T) {
 	t.Log("start to test incident creation for /v2/events")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	t.Log("check if all incidents have end date, if not, set it to start date + 1ms")
 	incidents := v2GetEvents(t, r)
@@ -310,7 +310,7 @@ func TestV2PostEventsHandler(t *testing.T) {
 
 func TestV2PatchEventHandlerNegative(t *testing.T) {
 	t.Log("start to test negative cases for incident patching and check json data for /v2/events/42")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	components := []int{1}
 	impact := 1
@@ -417,7 +417,7 @@ func TestV2PatchEventHandlerNegative(t *testing.T) {
 
 func TestV2PatchEventHandler(t *testing.T) {
 	t.Log("start to test incident patching")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	components := []int{1}
 	impact := 1
@@ -530,7 +530,7 @@ func TestV2PatchEventHandler(t *testing.T) {
 
 func TestV2PostEventExtractHandler(t *testing.T) {
 	t.Log("start to test component extraction from incident for the endpoint /v2/events/42/extract")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	t.Log("check if all incidents have end date, if not, set it to start date + 1ms")
 	incidents := v2GetEvents(t, r)
@@ -717,7 +717,7 @@ func v2PatchEvent(t *testing.T, r *gin.Engine, inc *v2.Incident, status ...event
 
 func TestV2GetEventsFilteredHandler(t *testing.T) {
 	t.Log("start to test GET /v2/events with filters and pagination")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// First, get all incidents to understand current state
 	allIncidents := v2GetEvents(t, r)
@@ -854,7 +854,7 @@ func TestV2GetEventsFilteredHandler(t *testing.T) {
 
 func TestV2GetEventsHandler(t *testing.T) {
 	t.Logf("start to test GET %s with pagination", v2EventsEndpoint)
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	type V2EventsListResponseLocal struct {
 		Data       []*v2.Incident `json:"data"`
@@ -947,7 +947,7 @@ func TestV2GetEventsHandler(t *testing.T) {
 
 func TestV2PostEventsMaintenanceHandler(t *testing.T) {
 	t.Log("start to test maintenance creation for /v2/events")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	t.Log("create a maintenance")
 
@@ -988,7 +988,7 @@ func TestV2PostEventsMaintenanceHandler(t *testing.T) {
 
 func TestV2PostEventsInfoWithExistingEventsHandler(t *testing.T) {
 	t.Log("start to test 'info' incident creation when an 'incident' and a 'maintenance' for the same component already exist")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// 1. Preparation: Close any existing open incidents for a clean state.
 	incidentsBeforeTest := v2GetEvents(t, r)
@@ -1116,7 +1116,7 @@ func TestV2PostEventsInfoWithExistingEventsHandler(t *testing.T) {
 
 func TestV2PatchEventUpdateHandler(t *testing.T) {
 	t.Log("start to test PATCH /v2/events/:incidentID/updates/:updateID")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// Clean up database before test to ensure a clean state for this test case.
 	truncateIncidents(t)

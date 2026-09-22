@@ -21,7 +21,7 @@ import (
 
 func TestV1GetIncidentsHandler(t *testing.T) {
 	t.Log("start to test GET /v1/incidents")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 	restoreFixtureIncident(t)
 
 	var response = `[{"id":1,"text":"Closed incident without any update","impact":1,"start_date":"2025-05-22 10:12","end_date":"2025-05-22 11:12","updates":[{"status":"resolved","text":"close incident","timestamp":"2025-05-22 11:12"}]}]`
@@ -37,7 +37,7 @@ func TestV1GetIncidentsHandler(t *testing.T) {
 
 func TestV1GetComponentsStatusHandler(t *testing.T) {
 	t.Log("start to test GET /v1/component_status")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 	restoreFixtureIncident(t)
 
 	var response = `[{"id":1,"attributes":[{"name":"region","value":"EU-DE"},{"name":"category","value":"Container"},{"name":"type","value":"cce"}],"name":"Cloud Container Engine","incidents":[{"id":1,"text":"Closed incident without any update","impact":1,"start_date":"2025-05-22 10:12","end_date":"2025-05-22 11:12","updates":[{"status":"resolved","text":"close incident","timestamp":"2025-05-22 11:12"}]}]},{"id":2,"attributes":[{"name":"region","value":"EU-NL"},{"name":"category","value":"Container"},{"name":"type","value":"cce"}],"name":"Cloud Container Engine","incidents":[]},{"id":3,"attributes":[{"name":"region","value":"EU-DE"},{"name":"category","value":"Compute"},{"name":"type","value":"ecs"}],"name":"Elastic Cloud Server","incidents":[]},{"id":4,"attributes":[{"name":"region","value":"EU-NL"},{"name":"category","value":"Compute"},{"name":"type","value":"ecs"}],"name":"Elastic Cloud Server","incidents":[]},{"id":5,"attributes":[{"name":"region","value":"EU-DE"},{"name":"category","value":"Database"},{"name":"type","value":"dcs"}],"name":"Distributed Cache Service","incidents":[]},{"id":6,"attributes":[{"name":"region","value":"EU-NL"},{"name":"category","value":"Database"},{"name":"type","value":"dcs"}],"name":"Distributed Cache Service","incidents":[]}]`
@@ -53,7 +53,7 @@ func TestV1GetComponentsStatusHandler(t *testing.T) {
 
 func TestV1PostComponentsStatusHandlerNegative(t *testing.T) {
 	t.Log("start to test incident creation and check json data for /v1/component_status")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	type testCase struct {
 		ExpectedCode int
@@ -94,7 +94,7 @@ func TestV1PostComponentsStatusHandlerNegative(t *testing.T) {
 
 func TestV1PostComponentsStatusHandler(t *testing.T) {
 	t.Log("start to test incident creation, modification by /v1/component_status")
-	r, dbIns, _ := initTests(t)
+	r, dbIns := initTests(t)
 
 	compNameDCS := "Distributed Cache Service"
 	compAttrEUNL := []*v1.ComponentAttribute{{Name: "region", Value: "EU-NL"}}
@@ -235,7 +235,7 @@ func TestV1PostComponentsStatusHandler(t *testing.T) {
 
 func TestV1MaintenancePreventCreation(t *testing.T) {
 	t.Log("start to test incident creation, modification by /v1/component_status")
-	r, dbIns, _ := initTests(t)
+	r, dbIns := initTests(t)
 
 	t.Log("close all incidents, to allow create a new maintenance")
 

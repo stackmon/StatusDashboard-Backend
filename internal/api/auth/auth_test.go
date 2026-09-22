@@ -1,372 +1,227 @@
 package auth
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"os"
+	"context"
 	"testing"
+	"time"
 
-	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap/zaptest"
-	"golang.org/x/oauth2"
 )
 
-func TestMain(m *testing.M) {
-	gin.SetMode(gin.TestMode)
-	os.Exit(m.Run())
-}
+const testHMACSecret = "test-secret-key-for-unit-tests!!"
 
-// newTestProvider creates a Provider with a mock Keycloak server for testing.
-func newTestProvider(t *testing.T, kcHandler http.HandlerFunc) (*Provider, *httptest.Server) {
+func signHMAC(t *testing.T, secret string, method jwt.SigningMethod, claims jwt.MapClaims) string {
 	t.Helper()
-	ts := httptest.NewServer(kcHandler)
 
-	kc := &Keycloak{
-		httpClient:   ts.Client(),
-		clientID:     "test-client",
-		clientSecret: "test-secret",
-		tokenURL:     ts.URL + "/token",
-		logoutURL:    ts.URL + "/logout",
-		jwksURL:      ts.URL + "/certs",
-	}
-
-	conf := &oauth2.Config{
-		ClientID:     "test-client",
-		ClientSecret: "test-secret",
-		Endpoint:     oauth2.Endpoint{TokenURL: ts.URL + "/token"},
-	}
-
-	prov := &Provider{
-		WebURL:  "http://localhost:9000",
-		kc:      kc,
-		conf:    conf,
-		storage: newInternalStorage(),
-	}
-
-	return prov, ts
-}
-
-func TestProvider_PutGetToken(t *testing.T) {
-	prov := &Provider{storage: newInternalStorage()}
-
-	prov.PutToken("challenge", TokenRepr{AccessToken: "at", RefreshToken: "rt"})
-	token, ok := prov.GetToken("challenge")
-	require.True(t, ok)
-	assert.Equal(t, "at", token.AccessToken)
-	assert.Equal(t, "rt", token.RefreshToken)
-
-	// GetToken is consume-once
-	_, ok = prov.GetToken("challenge")
-	assert.False(t, ok, "second GetToken should return false (token consumed)")
-}
-
-func TestGetLoginPageHandler_MissingState(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	prov := &Provider{conf: &oauth2.Config{}}
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/auth/login", nil)
-
-	handler := GetLoginPageHandler(prov, logger)
-	handler(c)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-func TestGetLoginPageHandler_WithState(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	prov := &Provider{
-		conf: &oauth2.Config{
-			ClientID: "test",
-			Endpoint: oauth2.Endpoint{AuthURL: "http://kc.test/auth"},
-		},
-	}
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/auth/login?state=abc", nil)
-
-	handler := GetLoginPageHandler(prov, logger)
-	handler(c)
-	assert.Equal(t, http.StatusSeeOther, w.Code)
-	assert.Contains(t, w.Header().Get("Location"), "http://kc.test/auth")
-}
-
-func TestPostTokenHandler_MissingBody(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	prov := &Provider{storage: newInternalStorage()}
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/auth/token", nil)
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	handler := PostTokenHandler(prov, logger)
-	handler(c)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-func TestPostTokenHandler_InvalidCodeVerifier(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	prov := &Provider{storage: newInternalStorage()}
-
-	body, _ := json.Marshal(CodeVerifierReq{CodeVerifier: "wrong-verifier"})
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/auth/token", bytes.NewReader(body))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	handler := PostTokenHandler(prov, logger)
-	handler(c)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-func TestPostTokenHandler_ValidCodeVerifier(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	prov := &Provider{storage: newInternalStorage()}
-
-	// Compute code_challenge = SHA256(code_verifier)
-	verifier := "my-code-verifier-12345"
-	h := sha256.New()
-	h.Write([]byte(verifier))
-	challenge := hex.EncodeToString(h.Sum(nil))
-
-	prov.PutToken(challenge, TokenRepr{AccessToken: "at-ok", RefreshToken: "rt-ok"})
-
-	body, _ := json.Marshal(CodeVerifierReq{CodeVerifier: verifier})
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/auth/token", bytes.NewReader(body))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	handler := PostTokenHandler(prov, logger)
-	handler(c)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp TokenRepr
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "at-ok", resp.AccessToken)
-	assert.Equal(t, "rt-ok", resp.RefreshToken)
-}
-
-func TestPutLogoutHandler_MissingBody(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	prov := &Provider{storage: newInternalStorage()}
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPut, "/auth/logout", nil)
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	handler := PutLogoutHandler(prov, logger)
-	handler(c)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-func TestPutLogoutHandler_KeycloakSuccess(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-
-	prov, ts := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/logout" {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-	})
-	defer ts.Close()
-
-	body, _ := json.Marshal(PutLogoutReq{RefreshToken: "valid-rt"})
-
-	router := gin.New()
-	router.PUT("/auth/logout", PutLogoutHandler(prov, logger))
-
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut, "/auth/logout", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusNoContent, w.Code)
-}
-
-func TestPutLogoutHandler_KeycloakError(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-
-	prov, ts := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/logout" {
-			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(KeycloakExternalError{
-				ErrorOrig:        "invalid_grant",
-				ErrorDescription: "Token is not active",
-			})
-			return
-		}
-	})
-	defer ts.Close()
-
-	body, _ := json.Marshal(PutLogoutReq{RefreshToken: "expired-rt"})
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPut, "/auth/logout", bytes.NewReader(body))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	handler := PutLogoutHandler(prov, logger)
-	handler(c)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-func TestPostRefreshHandler_MissingBody(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	prov := &Provider{storage: newInternalStorage()}
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	handler := PostRefreshHandler(prov, logger)
-	handler(c)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-func TestPostRefreshHandler_Success(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-
-	prov, ts := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/token" {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(TokenRepr{AccessToken: "new-at", RefreshToken: "new-rt"})
-			return
-		}
-	})
-	defer ts.Close()
-
-	body, _ := json.Marshal(RefreshTokenReq{RefreshToken: "old-rt"})
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/auth/refresh", bytes.NewReader(body))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	handler := PostRefreshHandler(prov, logger)
-	handler(c)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var resp TokenRepr
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "new-at", resp.AccessToken)
-	assert.Equal(t, "new-rt", resp.RefreshToken)
-}
-
-func TestPostRefreshHandler_KeycloakError(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-
-	prov, ts := newTestProvider(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/token" {
-			w.WriteHeader(http.StatusBadRequest)
-			_ = json.NewEncoder(w).Encode(KeycloakExternalError{
-				ErrorOrig:        "invalid_grant",
-				ErrorDescription: "Session not active",
-			})
-			return
-		}
-	})
-	defer ts.Close()
-
-	body, _ := json.Marshal(RefreshTokenReq{RefreshToken: "expired-rt"})
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/auth/refresh", bytes.NewReader(body))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	handler := PostRefreshHandler(prov, logger)
-	handler(c)
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-func TestKeycloak_FetchPublicKey_Success(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// Minimal JWKS response with a valid RSA key
-		jwks := `{
-			"keys": [{
-				"kty": "RSA",
-				"alg": "RS256",
-				"use": "sig",
-				"kid": "test-kid",
-				"n": "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw",
-				"e": "AQAB"
-			}]
-		}`
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, jwks)
-	}))
-	defer ts.Close()
-
-	kc := &Keycloak{
-		httpClient: ts.Client(),
-		jwksURL:    ts.URL + "/certs",
-	}
-
-	pubKey, err := kc.fetchPublicKey()
+	token := jwt.NewWithClaims(method, claims)
+	signed, err := token.SignedString([]byte(secret))
 	require.NoError(t, err)
-	assert.NotNil(t, pubKey)
-	assert.Equal(t, 65537, pubKey.E)
+
+	return signed
 }
 
-func TestKeycloak_FetchPublicKey_NoRSAKey(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"keys": []}`)
-	}))
-	defer ts.Close()
-
-	kc := &Keycloak{
-		httpClient: ts.Client(),
-		jwksURL:    ts.URL + "/certs",
+func validHMACClaims() jwt.MapClaims {
+	return jwt.MapClaims{
+		"preferred_username": "alice",
+		"groups":             []any{"sd_creators", "argocd-admin"},
+		"exp":                time.Now().Add(time.Hour).Unix(),
 	}
-
-	_, err := kc.fetchPublicKey()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no RSA public key found")
 }
 
-func TestKeycloak_FetchPublicKey_InvalidJSON(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, "not json")
-	}))
-	defer ts.Close()
+func TestAuthenticatorVerifyHMAC(t *testing.T) {
+	t.Parallel()
 
-	kc := &Keycloak{
-		httpClient: ts.Client(),
-		jwksURL:    ts.URL + "/certs",
-	}
+	authn := NewAuthenticator(nil, testHMACSecret)
 
-	_, err := kc.fetchPublicKey()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "error decoding JWK set")
+	t.Run("valid token", func(t *testing.T) {
+		t.Parallel()
+
+		claims, err := authn.Verify(context.Background(),
+			signHMAC(t, testHMACSecret, jwt.SigningMethodHS256, validHMACClaims()))
+
+		require.NoError(t, err)
+		assert.Equal(t, "alice", claims.Subject)
+		assert.Equal(t, "alice", claims.Username)
+		assert.Equal(t, []string{"sd_creators", "argocd-admin"}, claims.Roles)
+		assert.Equal(t, ProviderLocalHMAC, claims.Provider)
+	})
+
+	t.Run("hmac token without configured secret", func(t *testing.T) {
+		t.Parallel()
+
+		noSecret := NewAuthenticator(nil, "")
+		_, err := noSecret.Verify(context.Background(),
+			signHMAC(t, testHMACSecret, jwt.SigningMethodHS256, validHMACClaims()))
+
+		assert.ErrorIs(t, err, ErrNoProviderConfigured)
+	})
+
+	t.Run("wrong secret", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := authn.Verify(context.Background(),
+			signHMAC(t, "another-secret", jwt.SigningMethodHS256, validHMACClaims()))
+
+		assert.ErrorIs(t, err, ErrTokenInvalid)
+	})
+
+	t.Run("expired token", func(t *testing.T) {
+		t.Parallel()
+
+		claims := validHMACClaims()
+		claims["exp"] = time.Now().Add(-time.Hour).Unix()
+
+		_, err := authn.Verify(context.Background(),
+			signHMAC(t, testHMACSecret, jwt.SigningMethodHS256, claims))
+
+		assert.ErrorIs(t, err, ErrTokenInvalid)
+	})
+
+	t.Run("missing preferred_username", func(t *testing.T) {
+		t.Parallel()
+
+		claims := validHMACClaims()
+		delete(claims, "preferred_username")
+
+		_, err := authn.Verify(context.Background(),
+			signHMAC(t, testHMACSecret, jwt.SigningMethodHS256, claims))
+
+		assert.ErrorIs(t, err, ErrTokenInvalid)
+	})
+
+	t.Run("groups is not an array", func(t *testing.T) {
+		t.Parallel()
+
+		claims := validHMACClaims()
+		claims["groups"] = "sd_creators"
+
+		_, err := authn.Verify(context.Background(),
+			signHMAC(t, testHMACSecret, jwt.SigningMethodHS256, claims))
+
+		assert.ErrorIs(t, err, ErrTokenInvalid)
+	})
+
+	t.Run("groups contains a non-string value", func(t *testing.T) {
+		t.Parallel()
+
+		claims := validHMACClaims()
+		claims["groups"] = []any{"sd_creators", 42}
+
+		_, err := authn.Verify(context.Background(),
+			signHMAC(t, testHMACSecret, jwt.SigningMethodHS256, claims))
+
+		assert.ErrorIs(t, err, ErrTokenInvalid)
+	})
+
+	t.Run("tampered payload", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := authn.Verify(context.Background(), "eyJhbGciOiJIUzI1NiJ9.not-a-payload.sig")
+
+		assert.ErrorIs(t, err, ErrTokenInvalid)
+	})
 }
 
-func TestKeycloakExternalError_Error(t *testing.T) {
-	err := KeycloakExternalError{
-		ErrorOrig:        "invalid_grant",
-		ErrorDescription: "Token is not active",
-	}
-	assert.Equal(t, "Token is not active", err.Error())
+func TestAuthenticatorVerifyOIDC(t *testing.T) {
+	t.Parallel()
+
+	t.Run("asymmetric token without configured provider", func(t *testing.T) {
+		t.Parallel()
+
+		idp := newTestIDP(t, true)
+		authn := NewAuthenticator(nil, testHMACSecret)
+
+		_, err := authn.Verify(context.Background(), idp.token(t, nil))
+
+		assert.ErrorIs(t, err, ErrNoProviderConfigured)
+	})
+
+	t.Run("asymmetric token is delegated to the provider", func(t *testing.T) {
+		t.Parallel()
+
+		idp := newTestIDP(t, true)
+		provider := newTestProvider(t, idp, "sd_admins")
+		authn := NewAuthenticator(provider, testHMACSecret)
+
+		claims, err := authn.Verify(context.Background(), idp.token(t, func(claims map[string]any) {
+			claims[testRolesClaim] = map[string]any{"sd_admins": map[string]any{testOrgID: "otc"}}
+		}))
+
+		require.NoError(t, err)
+		assert.Equal(t, ProviderZitadel, claims.Provider)
+		assert.Equal(t, []string{"sd_admins"}, claims.Roles)
+	})
+
+	t.Run("malformed token", func(t *testing.T) {
+		t.Parallel()
+
+		authn := NewAuthenticator(nil, testHMACSecret)
+
+		_, err := authn.Verify(context.Background(), "garbage")
+
+		assert.ErrorIs(t, err, ErrTokenInvalid)
+	})
+
+	t.Run("alg none token", func(t *testing.T) {
+		t.Parallel()
+
+		token := jwt.NewWithClaims(jwt.SigningMethodNone, validHMACClaims())
+		unsigned, err := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
+		require.NoError(t, err)
+
+		t.Run("is rejected without a provider", func(t *testing.T) {
+			t.Parallel()
+
+			authn := NewAuthenticator(nil, testHMACSecret)
+
+			_, verifyErr := authn.Verify(context.Background(), unsigned)
+
+			assert.ErrorIs(t, verifyErr, ErrNoProviderConfigured)
+		})
+
+		t.Run("is rejected by the provider", func(t *testing.T) {
+			t.Parallel()
+
+			idp := newTestIDP(t, true)
+			authn := NewAuthenticator(newTestProvider(t, idp), testHMACSecret)
+
+			_, verifyErr := authn.Verify(context.Background(), unsigned)
+
+			assert.ErrorIs(t, verifyErr, ErrTokenInvalid)
+		})
+	})
 }
 
-func TestNewKeycloak_Endpoints(t *testing.T) {
-	kc := NewKeycloak("http://kc.test", "myrealm", "client-id", "client-secret")
+func TestSigningMethod(t *testing.T) {
+	t.Parallel()
 
-	assert.Equal(t, "http://kc.test/realms/myrealm", kc.issuer)
-	assert.Contains(t, kc.authURL, "/protocol/openid-connect/auth")
-	assert.Contains(t, kc.tokenURL, "/protocol/openid-connect/token")
-	assert.Contains(t, kc.jwksURL, "/protocol/openid-connect/certs")
-	assert.Contains(t, kc.logoutURL, "/protocol/openid-connect/logout")
+	t.Run("hmac", func(t *testing.T) {
+		t.Parallel()
 
-	ep := kc.Endpoint()
-	assert.Equal(t, kc.authURL, ep.AuthURL)
-	assert.Equal(t, kc.tokenURL, ep.TokenURL)
+		method, err := signingMethod(signHMAC(t, testHMACSecret, jwt.SigningMethodHS384, validHMACClaims()))
+
+		require.NoError(t, err)
+		assert.Equal(t, jwt.SigningMethodHS384.Alg(), method.Alg())
+	})
+
+	t.Run("rsa", func(t *testing.T) {
+		t.Parallel()
+
+		idp := newTestIDP(t, true)
+
+		method, err := signingMethod(idp.token(t, nil))
+
+		require.NoError(t, err)
+		assert.Equal(t, "RS256", method.Alg())
+	})
+
+	t.Run("malformed", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := signingMethod("not-a-jwt")
+
+		assert.ErrorIs(t, err, ErrTokenInvalid)
+	})
 }

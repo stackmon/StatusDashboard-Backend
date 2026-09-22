@@ -28,13 +28,26 @@ import (
 const (
 	testHMACSecret = "test-secret-key-for-rbac-tests!!"
 
-	creatorGroup  = "sd_creators"
-	operatorGroup = "sd_operators"
-	adminGroup    = "sd_admins"
+	creatorRole  = "sd_creators"
+	operatorRole = "sd_operators"
+	adminRole    = "sd_admins"
+	// unmappedRole is a valid project role in Zitadel that the backend does not
+	// map to any RBAC tier.
+	unmappedRole = "sd_readers"
 )
 
+// testRBACService builds the RBAC service with the same role mapping as the
+// production configuration.
+func testRBACService() *rbac.Service {
+	return rbac.New(rbac.Config{
+		Creators:  creatorRole,
+		Operators: operatorRole,
+		Admins:    adminRole,
+	})
+}
+
 // initTestsWithHMAC sets up a router with RBAC middleware using HMAC-signed
-// JWTs. Does not require Keycloak or environment variables.
+// JWTs. Does not require Zitadel or environment variables.
 func initTestsWithHMAC(t *testing.T) *gin.Engine {
 	t.Helper()
 
@@ -47,47 +60,50 @@ func initTestsWithHMAC(t *testing.T) *gin.Engine {
 	r.Use(api.ErrorHandle())
 
 	logger, _ := zap.NewDevelopment()
-	prov := &auth.Provider{}
-	rbacSvc := rbac.New(creatorGroup, operatorGroup, adminGroup)
+	authn := auth.NewAuthenticator(nil, testHMACSecret)
+	rbacSvc := testRBACService()
 
 	v2Api := r.Group("v2")
 
 	v2Api.GET("events",
-		api.SetJWTClaims(prov, logger, testHMACSecret),
+		api.SetJWTClaims(authn, logger),
 		v2.GetEventsHandler(d, logger, rbacSvc))
 	v2Api.POST("events",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.ValidateComponentsMW(d, logger),
 		v2.PostIncidentHandler(d, logger))
 	v2Api.GET("events/:eventID",
-		api.SetJWTClaims(prov, logger, testHMACSecret),
+		api.SetJWTClaims(authn, logger),
 		api.CheckEventExistenceMW(d, logger),
 		v2.GetIncidentHandler(d, logger, rbacSvc))
 	v2Api.PATCH("events/:eventID",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(d, logger),
 		v2.PatchIncidentHandler(d, logger))
 	v2Api.POST("events/:eventID/extract",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(d, logger),
 		api.ValidateComponentsMW(d, logger),
 		v2.PostIncidentExtractHandler(d, logger))
+	v2Api.POST("components",
+		api.AuthenticationMW(authn, logger),
+		v2.PostComponentHandler(d, logger))
 
 	return r
 }
 
-// tokenForRole creates a signed HMAC JWT for the given user/groups.
-func tokenForRole(userID string, groups ...string) string {
-	ifaceGroups := make([]interface{}, len(groups))
-	for i, g := range groups {
-		ifaceGroups[i] = g
+// tokenForRole creates a signed HMAC JWT for the given user and roles.
+func tokenForRole(userID string, roles ...string) string {
+	ifaceRoles := make([]interface{}, len(roles))
+	for i, role := range roles {
+		ifaceRoles[i] = role
 	}
 	claims := jwt.MapClaims{
 		"preferred_username": userID,
-		"groups":             ifaceGroups,
+		"groups":             ifaceRoles,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString([]byte(testHMACSecret))
@@ -99,11 +115,11 @@ func tokenForRole(userID string, groups ...string) string {
 
 // Pre-built tokens for each role used across RBAC tests.
 var (
-	adminToken    = tokenForRole("admin-user", adminGroup)
-	operatorToken = tokenForRole("operator-user", operatorGroup)
-	creatorTokenA = tokenForRole("user-a", creatorGroup)
-	creatorTokenB = tokenForRole("user-b", creatorGroup)
-	noRoleToken   = tokenForRole("norole-user", "some_other_group")
+	adminToken    = tokenForRole("admin-user", adminRole)
+	operatorToken = tokenForRole("operator-user", operatorRole)
+	creatorTokenA = tokenForRole("user-a", creatorRole)
+	creatorTokenB = tokenForRole("user-b", creatorRole)
+	noRoleToken   = tokenForRole("norole-user", unmappedRole)
 )
 
 // ---------------------------------------------------------------------------
