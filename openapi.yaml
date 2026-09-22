@@ -127,34 +127,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/InternalServerError"
-    patch:
-      summary: Update target component.
-      tags:
-        - components
-      responses:
-        "200":
-          description: Successful operation.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Component"
-        "404":
-          description: The component is not found.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  errMsg:
-                    type: string
-                    example: component does not exist
-
-        "500":
-          description: internal server error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/InternalServerError"
   /v2/availability:
     get:
       summary: Get availability.

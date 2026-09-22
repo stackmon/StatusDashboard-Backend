@@ -159,7 +159,7 @@ func isCancelledWithoutPublicStatus(inc *db.Incident) bool {
 
 // isPubliclyVisible returns true if the incident should be visible on public
 // (unauthenticated) V1 endpoints. Maintenance events in pending_review or
-// reviewed status require authorization (see docs/auth/permissions.md).
+// reviewed status require authorization (see docs/auth.md).
 func isPubliclyVisible(inc *db.Incident) bool {
 	if inc.Type == event.TypeMaintenance &&
 		(inc.Status == event.MaintenancePendingReview || inc.Status == event.MaintenanceReviewed) {
