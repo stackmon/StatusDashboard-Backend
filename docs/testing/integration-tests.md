@@ -397,7 +397,7 @@ test(s) that verify it.
 
 | Requirement | Description | Covered By |
 |-------------|-------------|------------|
-| FR-002 | Extract roles from the JWT token | `TestToken_InvalidGroupsClaim` |
+| FR-002 | Extract roles from the JWT token | `TestToken_MalformedRolesClaim` |
 | FR-002a | Map role names via SD_RBAC_ROLES_* env vars | `TestToken_ValidClaimsSucceeds` |
 | FR-004 | Creator can create maintenance events | `TestCreation_RoleInitialStatus` |
 | FR-005 | Creator → pending_review initial status | `TestCreation_RoleInitialStatus/creator_creates_maintenance_with_pending_review_status` |
@@ -425,7 +425,7 @@ test(s) that verify it.
 | FR-022-1 | Hide pending_review/reviewed from unauthenticated | `TestVisibility_PendingReviewHiddenFromUnauth` |
 | FR-024 | Creator cannot skip statuses | `TestPermissions_CreatorPatchRestrictions/cannot_patch_planned_event` |
 | FR-025 | Audit trail in incident_status table | `TestWorkflow_UpdateHistoryPreserved` |
-| FR-026 | Validate JWT tokens | `TestToken_InvalidSignature` |
+| FR-026 | Validate JWT tokens | `TestToken_ForeignSignature` |
 | FR-027 | 401 for missing JWT | `TestPermissions_UnauthenticatedRejected` |
 | FR-028 | 403 for insufficient permissions | `TestPermissions_NoRoleRejected` |
 | FR-029 | Validate creator user_id for cross-user access | `TestPermissions_CreatorPatchRestrictions/cannot_patch_another_creators_event` |
@@ -459,7 +459,7 @@ or future test additions):
 | `rbac_creation_test.go` | RBAC | `TestCreation_RoleInitialStatus`, `TestCreation_IncidentByRoles`, `TestCreation_MaintenanceValidation` |
 | `rbac_permissions_test.go` | RBAC | `TestPermissions_OperatorPatchMatrix`, `TestPermissions_AdminPatchMatrix`, `TestPermissions_CreatorPatchRestrictions`, `TestPermissions_NoRoleRejected`, `TestPermissions_UnauthenticatedRejected` |
 | `rbac_reporter_test.go` | RBAC | `TestReporter_CanCreateSystemIncident`, `TestReporter_CannotCreateHumanEvents`, `TestReporter_CannotMutateEvents`, `TestReporter_CannotWriteComponents`, `TestReporter_PublicView` |
-| `rbac_token_test.go` | RBAC | `TestToken_InvalidSignature`, `TestToken_InvalidGroupsClaim`, `TestToken_ValidClaimsSucceeds` |
+| `rbac_token_test.go` | RBAC | `TestToken_ForeignSignature`, `TestToken_MalformedRolesClaim`, `TestToken_ValidClaimsSucceeds` |
 | `rbac_version_test.go` | RBAC | `TestVersion_NilVersionOnMaintenancePatch`, `TestVersion_WrongVersionOnMaintenancePatch`, `TestVersion_NilVersionOnIncidentPatch`, `TestVersion_WrongVersionOnIncidentPatch`, `TestVersion_ConcurrentMaintenancePatch` |
 | `rbac_visibility_test.go` | RBAC | `TestVisibility_PendingReviewHiddenFromUnauth`, `TestVisibility_PendingReviewVisibleToAuth`, `TestVisibility_ContactEmailAndCreator`, `TestVisibility_AuthVsUnauthEventList` |
 | `rbac_workflow_test.go` | RBAC | `TestWorkflow_CreatorToCompletionViaOperator`, `TestWorkflow_CreatorToCompletionViaAdmin`, `TestWorkflow_OperatorFullLifecycle`, `TestWorkflow_CancellationFromAnyStatus`, `TestWorkflow_CreatorBlockedAfterApproval`, `TestWorkflow_OperatorApprovesAndPlans`, `TestWorkflow_UpdateHistoryPreserved` |
