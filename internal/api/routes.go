@@ -4,13 +4,11 @@ import (
 	"fmt"
 
 	"github.com/stackmon/otc-status-dashboard/internal/api/rss"
-	v1 "github.com/stackmon/otc-status-dashboard/internal/api/v1"
 	v2 "github.com/stackmon/otc-status-dashboard/internal/api/v2"
 	newRSS "github.com/stackmon/otc-status-dashboard/internal/rss"
 )
 
 const (
-	v1Group = "v1"
 	v2Group = "v2"
 )
 
@@ -18,7 +16,6 @@ const (
 // returned so that a misconfigured deployment fails at boot instead of serving
 // 500s on the first request.
 func (a *API) InitRoutes(openAPISpecPath string) error {
-	a.initV1Routes()
 	a.initV2Routes()
 	a.initRSSRoutes()
 
@@ -29,21 +26,6 @@ func (a *API) InitRoutes(openAPISpecPath string) error {
 	a.r.GET("/openapi.json", openAPIHandler)
 	a.r.GET("/swagger/*any", swaggerUIHandler("/openapi.json"))
 	return nil
-}
-
-// initV1Routes registers the deprecated /v1 routes kept for compatibility.
-func (a *API) initV1Routes() {
-	v1API := a.r.Group(v1Group)
-	{
-		v1API.GET("component_status", v1.GetComponentsStatusHandler(a.db, a.log))
-		v1API.POST("component_status",
-			AuthenticationMW(a.authn, a.log),
-			DenyReporterScopeMW(a.rbac, a.log),
-			v1.PostComponentStatusHandler(a.db, a.log),
-		)
-
-		v1API.GET("incidents", v1.GetIncidentsHandler(a.db, a.log))
-	}
 }
 
 // initV2Routes registers the current /v2 routes.

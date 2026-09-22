@@ -54,7 +54,6 @@ Each `SD_RBAC_ROLES_*` variable accepts a comma-separated list of names. The dep
 | `/v2/components` | list, create, read |
 | `/v2/availability` | monthly availability per component |
 | `/rss/` | RSS feed for the frontend |
-| `/v1/component_status`, `/v1/incidents` | legacy API kept for the old frontend |
 
 Business rules the specification cannot express — validation, status lifecycles, automatic
 transitions — are documented in [docs/events.md](docs/events.md).
@@ -69,7 +68,7 @@ make migrate-up  # apply the next migration from db/migrations
 make migrate-create name=add_xyz
 ```
 
-Layout: `cmd/` entry point, `internal/api` HTTP layer (middleware, routes, `v1`, `v2`, `rbac`,
+Layout: `cmd/` entry point, `internal/api` HTTP layer (middleware, routes, `v2`, `rbac`,
 `auth`), `internal/db` persistence, `internal/checker` background status transitions,
 `internal/event` domain types, `db/migrations` schema, `tests/` integration suite,
 `openapi.yaml` contract.
@@ -78,8 +77,8 @@ Layout: `cmd/` entry point, `internal/api` HTTP layer (middleware, routes, `v1`,
 
 | Document | Contents |
 | --- | --- |
-| [docs/events.md](docs/events.md) | event types, creation rules, status lifecycles, availability, RSS, legacy API |
+| [docs/events.md](docs/events.md) | event types, creation rules, status lifecycles, availability, RSS |
 | [docs/auth.md](docs/auth.md) | OIDC authentication, RBAC roles, permissions, field visibility |
 | [docs/testing.md](docs/testing.md) | unit and integration suites, how to run them |
-| [docs/diagrams/](docs/diagrams) | decision graphs for the v1 flow and for system incident creation |
+| [docs/diagrams/](docs/diagrams) | decision graph for system incident creation |
 | [openapi.yaml](openapi.yaml) | HTTP contract and schemas |

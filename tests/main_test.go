@@ -26,7 +26,6 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/api"
 	"github.com/stackmon/otc-status-dashboard/internal/api/auth"
 	apiErrors "github.com/stackmon/otc-status-dashboard/internal/api/errors"
-	v1 "github.com/stackmon/otc-status-dashboard/internal/api/v1"
 	v2 "github.com/stackmon/otc-status-dashboard/internal/api/v2"
 	"github.com/stackmon/otc-status-dashboard/internal/conf"
 	"github.com/stackmon/otc-status-dashboard/internal/db"
@@ -115,7 +114,7 @@ func applyMigrations(dbURL string) error {
 	return nil
 }
 
-func initTests(t *testing.T) (*gin.Engine, *db.DB) {
+func initTests(t *testing.T) *gin.Engine {
 	t.Helper()
 	t.Log("init structs")
 
@@ -135,25 +134,9 @@ func initTests(t *testing.T) (*gin.Engine, *db.DB) {
 
 	authn := testIDP.provider(t, testRBACService().RoleNames()...)
 
-	initRoutesV1(t, r, d, authn, logger)
 	initRoutesV2(t, r, d, authn, logger)
 
-	return r, d
-}
-
-func initRoutesV1(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Provider, logger *zap.Logger) {
-	t.Helper()
-	t.Log("init routes for V1")
-
-	v1Api := c.Group("v1")
-
-	v1Api.GET("component_status", v1.GetComponentsStatusHandler(dbInst, logger))
-	v1Api.POST("component_status",
-		api.AuthenticationMW(authn, logger),
-		api.DenyReporterScopeMW(testRBACService(), logger),
-		v1.PostComponentStatusHandler(dbInst, logger))
-
-	v1Api.GET("incidents", v1.GetIncidentsHandler(dbInst, logger))
+	return r
 }
 
 func initRoutesV2(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Provider, logger *zap.Logger) {
@@ -254,30 +237,4 @@ func truncateIncidents(t *testing.T) {
 	require.NoError(t, err, "failed to get sql.DB from gorm for closing")
 	err = sqlDB.Close()
 	require.NoError(t, err, "failed to close gorm connection for truncation")
-}
-
-// restoreFixtureIncident re-inserts the dump_test.sql fixture incident
-// so that V1 GET tests see the expected data even after other tests modify the DB.
-func restoreFixtureIncident(t *testing.T) {
-	t.Helper()
-	truncateIncidents(t)
-
-	gormDB, err := gorm.Open(gormpostgres.Open(databaseURL), &gorm.Config{})
-	require.NoError(t, err)
-
-	sqls := []string{
-		`INSERT INTO incident (id, text, start_date, end_date, impact, type, system, status)
-		 VALUES (1, 'Closed incident without any update', '2025-05-22 10:12:42', '2025-05-22 11:12:42', 1, 'incident', true, 'resolved')`,
-		`INSERT INTO incident_component_relation (incident_id, component_id) VALUES (1, 1)`,
-		`INSERT INTO incident_status (incident_id, "timestamp", text, status)
-		 VALUES (1, '2025-05-22 11:12:42', 'close incident', 'resolved')`,
-		`SELECT setval('incident_id_seq', (SELECT COALESCE(MAX(id), 0) FROM incident))`,
-	}
-	for _, s := range sqls {
-		require.NoError(t, gormDB.Exec(s).Error)
-	}
-
-	sqlDB, err := gormDB.DB()
-	require.NoError(t, err)
-	require.NoError(t, sqlDB.Close())
 }
