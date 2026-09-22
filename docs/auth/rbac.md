@@ -2,13 +2,15 @@
 
 ## Overview
 
-The Status Dashboard implements RBAC for maintenance event management. Roles are extracted from the JWT `groups` claim and mapped to application permissions.
+The Status Dashboard implements RBAC for maintenance event management. Roles are resolved from the
+role names carried by the JWT roles claim of the access token and mapped to application permissions.
 
 ## Roles
 
 Three application roles are supported, with highest privilege taking precedence when a user has multiple roles.
-Role names in this document refer to abstract application roles. Each role is mapped from an IdP group
-configured via the corresponding environment variable (e.g. `SD_RBAC_GROUPS_ADMINS` → `admin` role).
+Role names in this document refer to abstract application roles. Each role is mapped from a role name
+of the identity provider project, configured via the corresponding environment variable
+(e.g. `SD_RBAC_GROUPS_ADMINS` → `admin` role).
 
 | Role | Priority | Description |
 |------|----------|-------------|
@@ -22,22 +24,21 @@ RBAC is always active — there is no disable toggle. `SD_RBAC_GROUPS_ADMINS` is
 `SD_RBAC_GROUPS_OPERATORS` and `SD_RBAC_GROUPS_CREATORS` are optional (when omitted, no user
 can match the corresponding role).
 
-Each variable accepts either a single group name or a **comma-separated list** of group names.
-All listed groups are mapped to the same role. Group names are matched case-sensitively after
-stripping a leading `/` (Keycloak sends groups with a `/` prefix by default).
+Each variable accepts either a single role name or a **comma-separated list** of role names.
+All listed role names are mapped to the same role, matched case-sensitively.
 
 | Environment Variable | Required | Description |
 |---------------------|----------|-------------|
-| `SD_RBAC_GROUPS_ADMINS` | **Yes** | Group name(s) that map to the `admin` role |
-| `SD_RBAC_GROUPS_OPERATORS` | No | Group name(s) that map to the `operator` role |
-| `SD_RBAC_GROUPS_CREATORS` | No | Group name(s) that map to the `creator` role |
+| `SD_RBAC_GROUPS_ADMINS` | **Yes** | Role name(s) that map to the `admin` role |
+| `SD_RBAC_GROUPS_OPERATORS` | No | Role name(s) that map to the `operator` role |
+| `SD_RBAC_GROUPS_CREATORS` | No | Role name(s) that map to the `creator` role |
 
-**Example** — mapping multiple Keycloak groups to the `admin` role:
+**Example** — mapping multiple Zitadel project roles to the `admin` role:
 ```
-SD_RBAC_GROUPS_ADMINS=sd-admins,status-dashboard
+SD_RBAC_GROUPS_ADMINS=sd_admins,status-dashboard
 ```
-A token containing either `/sd-admins` or `/status-dashboard` in its `groups` claim will be
-granted the `admin` role.
+A token whose roles claim contains either `sd_admins` or `status-dashboard` is granted the
+`admin` role.
 
 ## Permissions by Role
 
@@ -129,34 +130,38 @@ Events with status `pending_review` or `reviewed` are hidden from unauthenticate
 
 ## JWT Token Structure
 
-The API expects JWT tokens with the following claims:
+Zitadel access token claims used by the API:
 
 ```json
 {
-  "preferred_username": "user@example.com",
-  "groups": ["sd_creators", "other-group"]
+  "sub": "289257162845356033",
+  "aud": ["390700708019568682", "289257162845356225"],
+  "urn:zitadel:iam:org:project:roles": {
+    "sd_creators": {
+      "390700708019568682": "eco-preprod.tsi-dev.otc-service.com"
+    }
+  }
 }
 ```
 
-- `preferred_username` → stored as event creator
-- `groups` → each value is matched against the configured `SD_RBAC_GROUPS_*` environment variables to
-  resolve the application role. Leading `/` prefix is stripped before comparison (Keycloak sends
-  groups as `/group-name`). For example, if `SD_RBAC_GROUPS_ADMINS=sd-admins,status-dashboard`, then
-  a token containing either `/sd-admins` or `/status-dashboard` (or without `/`) in `groups` grants
-  the `admin` role.
+- `sub` → stored as the event `creator` (identity is the Zitadel user id, not an email address)
+- the claim named by `SD_OIDC_ROLES_CLAIM` (default `urn:zitadel:iam:org:project:roles`) → its role
+  names are matched against the configured `SD_RBAC_GROUPS_*` variables to resolve the application
+  role. Only names the resource server knows are considered, so unrelated custom role keys in the
+  same map are ignored. For example, with `SD_RBAC_GROUPS_ADMINS=sd_admins,status-dashboard`, a token
+  holding either role key is granted the `admin` role.
 
-## Dual-IdP Authentication
-
-The application supports two simultaneous identity providers:
+## Authentication Providers
 
 | Provider | JWT Algorithm | Key Source | Use Case |
 |----------|-------------|------------|----------|
-| **Keycloak (RSA)** | RS256 | JWKS endpoint → public key | Production SSO |
-| **Local (HMAC)** | HS256 / HS384 / HS512 | `SD_SECRET_KEY` env var | Dev, tests, service-to-service |
+| **OIDC (Zitadel)** | RS256 | Issuer discovery + JWKS | Production SSO |
+| **Local (HMAC)** | HS256 / HS384 / HS512 | `SD_SECRET_KEY` env var | Dev, tests, service-to-service (transitional) |
 
-`parseToken` dispatches on `token.Method`: `*jwt.SigningMethodHMAC` → secret key,
-`*jwt.SigningMethodRSA` → Keycloak public key. At least one provider must be configured;
-`conf.Validate()` fails otherwise.
+The verifier dispatches on the token `alg` header: RS256 tokens are verified against the configured
+issuer (signature, `iss`, `aud`, `exp`), HMAC tokens against `SD_SECRET_KEY`. At least one provider
+must be configured; `conf.Validate()` fails otherwise. See
+[authentication.md](authentication.md) for the full pipeline.
 
 ### Security Hardening
 
@@ -172,10 +177,11 @@ All authentication events are logged in structured SIEM-ready format:
   "event": "auth_audit",
   "action": "token_validation",
   "result": "success",
-  "idp_type": "keycloak",
+  "idp_type": "zitadel",
   "username": "user@example.com"
 }
 ```
 
 Fields: `event`, `action` (`token_validation` / `authorization`), `result` (`success` / `failure` / `denied`),
-`idp_type` (`local_hmac` / `keycloak` / `unknown`), `username`, `reason` (omitted when empty).
+`idp_type` (`zitadel` / `local_hmac` / `unknown`), `username` (only when the configured username
+claim is present), `reason` (omitted when empty).

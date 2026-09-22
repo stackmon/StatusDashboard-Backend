@@ -1,16 +1,18 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/json"
 	"fmt"
-	"reflect"
-	"testing"
-	"unsafe"
-
 	"net/http"
 	"net/http/httptest"
+	"testing"
+	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/coreos/go-oidc/v3/oidc/oidctest"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
@@ -22,73 +24,103 @@ import (
 	v2 "github.com/stackmon/otc-status-dashboard/internal/api/v2"
 )
 
-func setRealmPublicKey(prov *auth.Provider, key *rsa.PublicKey) {
-	val := reflect.ValueOf(prov).Elem()
-	field := val.FieldByName("realmPublicKey")
-	ptrToField := reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem()
-	ptrToField.Set(reflect.ValueOf(key))
+const (
+	testHMACSecret    = "test-hmac-secret-for-middleware!!"
+	testClientID      = "status-dashboard"
+	testKeyID         = "test-key"
+	testUsernameClaim = "preferred_username"
+	testRolesClaim    = "urn:zitadel:iam:org:project:roles"
+	testOrgID         = "390700708019568682"
+)
+
+// testIDP is a local OpenID Connect server publishing one RSA key.
+type testIDP struct {
+	server *httptest.Server
+	key    *rsa.PrivateKey
 }
 
-func TestParseToken_HMAC_Success(t *testing.T) {
-	secret := "supersecret"
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": "123"})
-	signed, err := token.SignedString([]byte(secret))
-	require.NoError(t, err, "failed to sign token")
+func newTestIDP(t *testing.T) *testIDP {
+	t.Helper()
 
-	logger := zaptest.NewLogger(t)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
 
-	parsed, err := parseToken(signed, secret, nil, logger)
-	require.NoError(t, err, "unexpected parse error")
-	assert.True(t, parsed.Valid, "expected token to be valid")
+	idpServer := &oidctest.Server{PublicKeys: []oidctest.PublicKey{{
+		PublicKey: key.Public(),
+		KeyID:     testKeyID,
+		Algorithm: oidc.RS256,
+	}}}
+	server := httptest.NewServer(idpServer)
+	t.Cleanup(server.Close)
+	idpServer.SetIssuer(server.URL)
+
+	return &testIDP{server: server, key: key}
 }
 
-func TestParseToken_HMAC_WrongSecret(t *testing.T) {
-	secret := "supersecret"
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": "123"})
-	signed, err := token.SignedString([]byte(secret))
-	require.NoError(t, err, "failed to sign token")
+// token signs an access token whose claims are the defaults, mutated by the
+// caller when a variant is needed.
+func (idp *testIDP) token(t *testing.T, mutate func(claims map[string]any)) string {
+	t.Helper()
 
-	logger := zaptest.NewLogger(t)
+	claims := map[string]any{
+		"iss": idp.server.URL,
+		"aud": testClientID,
+		"sub": "user-1",
+		"exp": time.Now().Add(time.Hour).Unix(),
+		"iat": time.Now().Unix(),
+	}
+	if mutate != nil {
+		mutate(claims)
+	}
 
-	_, err = parseToken(signed, "wrongsecret", nil, logger)
-	require.Error(t, err, "expected error when using wrong secret")
+	rawClaims, err := json.Marshal(claims)
+	require.NoError(t, err)
+
+	return oidctest.SignIDToken(idp.key, testKeyID, oidc.RS256, string(rawClaims))
 }
 
-func TestParseToken_RSA_Success(t *testing.T) {
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err, "failed to generate rsa key")
+// newIDPAuthenticator authenticates against the local test identity provider.
+func newIDPAuthenticator(t *testing.T, idp *testIDP, roleNames ...string) *auth.Authenticator {
+	t.Helper()
 
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{"sub": "rsa-user"})
-	signed, err := token.SignedString(priv)
-	require.NoError(t, err, "failed to sign rsa token")
+	provider, err := auth.NewProvider(context.Background(), auth.ProviderConfig{
+		Issuer:        idp.server.URL,
+		ClientID:      testClientID,
+		RolesClaim:    testRolesClaim,
+		RoleNames:     roleNames,
+		UsernameClaim: testUsernameClaim,
+	})
+	require.NoError(t, err)
 
-	prov := &auth.Provider{}
-	setRealmPublicKey(prov, &priv.PublicKey)
-
-	logger := zaptest.NewLogger(t)
-
-	parsed, err := parseToken(signed, "", prov, logger)
-	require.NoError(t, err, "unexpected parse error for rsa token")
-	assert.True(t, parsed.Valid, "expected rsa token to be valid")
+	return auth.NewAuthenticator(provider, "")
 }
 
-func TestParseToken_RSA_WrongPublicKey(t *testing.T) {
-	priv1, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err, "failed to generate rsa key1")
-	priv2, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err, "failed to generate rsa key2")
+func hmacAuthenticator(secret string) *auth.Authenticator {
+	return auth.NewAuthenticator(nil, secret)
+}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{"sub": "rsa-user"})
-	signed, err := token.SignedString(priv1)
-	require.NoError(t, err, "failed to sign rsa token")
+// rolePtr lets the RBAC tables distinguish "no role expected" (nil) from the
+// zero role.
+func rolePtr(role rbac.Role) *rbac.Role {
+	return &role
+}
 
-	prov := &auth.Provider{}
-	setRealmPublicKey(prov, &priv2.PublicKey)
+func hmacToken(t *testing.T, secret string, claims jwt.MapClaims) string {
+	t.Helper()
 
-	logger := zaptest.NewLogger(t)
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
+	require.NoError(t, err)
 
-	_, err = parseToken(signed, "", prov, logger)
-	require.Error(t, err, "expected error when public key does not match signature")
+	return signed
+}
+
+// hmacClaims builds transitional local token claims: identity in
+// preferred_username, roles in groups.
+func hmacClaims(roles ...string) jwt.MapClaims {
+	return jwt.MapClaims{
+		"preferred_username": "test-user",
+		"groups":             roles,
+	}
 }
 
 func performRequestWithAuth(mw gin.HandlerFunc, authHeader string) *httptest.ResponseRecorder {
@@ -104,388 +136,380 @@ func performRequestWithAuth(mw gin.HandlerFunc, authHeader string) *httptest.Res
 	}
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
+
 	return w
 }
 
-func TestAuthenticationMW_HMAC_SuccessAndFailures(t *testing.T) {
-	secret := "supersecret"
-	tkn := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"preferred_username": "test-user",
-		"groups":             []interface{}{"sd_admins"},
-	})
-	signed, err := tkn.SignedString([]byte(secret))
-	require.NoError(t, err, "failed to sign token")
-
+func TestAuthenticationMW_HMAC(t *testing.T) {
 	logger := zaptest.NewLogger(t)
+	mw := AuthenticationMW(hmacAuthenticator(testHMACSecret), logger)
 
-	prov := &auth.Provider{}
-	mw := AuthenticationMW(prov, logger, secret)
-	w := performRequestWithAuth(mw, "Bearer "+signed)
-	assert.Equal(t, http.StatusOK, w.Code, "expected middleware to allow valid HMAC token")
-
-	invalidGroupsTkn := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"preferred_username": "test-user",
-		"groups":             "sd_admins",
+	t.Run("valid token is accepted", func(t *testing.T) {
+		w := performRequestWithAuth(mw, "Bearer "+hmacToken(t, testHMACSecret, hmacClaims("sd_admins")))
+		assert.Equal(t, http.StatusOK, w.Code)
 	})
-	invalidSigned, err := invalidGroupsTkn.SignedString([]byte(secret))
-	require.NoError(t, err, "failed to sign token with invalid groups claim")
 
-	w = performRequestWithAuth(mw, "Bearer "+invalidSigned)
-	assert.Equal(t, http.StatusUnauthorized, w.Code, "expected 401 when groups claim has invalid type")
+	t.Run("missing authorization header returns 401", func(t *testing.T) {
+		w := performRequestWithAuth(mw, "")
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
 
-	w = performRequestWithAuth(mw, "")
-	assert.Equal(t, http.StatusUnauthorized, w.Code, "expected 401 when no Authorization header")
+	t.Run("token signed with another secret returns 401", func(t *testing.T) {
+		w := performRequestWithAuth(mw, "Bearer "+hmacToken(t, "other-secret", hmacClaims()))
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
 
-	mwWrong := AuthenticationMW(prov, logger, "wrong-secret")
-	w = performRequestWithAuth(mwWrong, "Bearer "+signed)
-	assert.Equal(t, http.StatusUnauthorized, w.Code, "expected 401 when secret does not match")
+	t.Run("roles claim of the wrong type returns 401", func(t *testing.T) {
+		claims := jwt.MapClaims{"preferred_username": "test-user", "groups": "sd_admins"}
+		w := performRequestWithAuth(mw, "Bearer "+hmacToken(t, testHMACSecret, claims))
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+
+	t.Run("unsigned token returns 401", func(t *testing.T) {
+		token := jwt.NewWithClaims(jwt.SigningMethodNone, hmacClaims("sd_admins"))
+		signed, err := token.SignedString(jwt.UnsafeAllowNoneSignatureType)
+		require.NoError(t, err)
+
+		w := performRequestWithAuth(mw, "Bearer "+signed)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+
+	t.Run("garbage token returns 401", func(t *testing.T) {
+		w := performRequestWithAuth(mw, "Bearer not-a-token")
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
 }
 
-func TestAuthenticationMW_RSA_ValidToken(t *testing.T) {
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err, "failed to generate rsa key")
-
-	claims := jwt.MapClaims{
-		"preferred_username": "rsa-user",
-		"groups":             []interface{}{"/sd-admins"},
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	signed, err := token.SignedString(priv)
-	require.NoError(t, err, "failed to sign rsa token")
-
-	prov := &auth.Provider{}
-	setRealmPublicKey(prov, &priv.PublicKey)
-
+func TestAuthenticationMW_Zitadel(t *testing.T) {
 	logger := zaptest.NewLogger(t)
+	idp := newTestIDP(t)
+	mw := AuthenticationMW(newIDPAuthenticator(t, idp, "sd_creators", "sd_operators", "sd_admins"), logger)
 
-	mw := AuthenticationMW(prov, logger, "")
-	w := performRequestWithAuth(mw, "Bearer "+signed)
-	assert.Equal(t, http.StatusOK, w.Code, "expected middleware to allow valid RSA token")
-}
-
-func TestRBACMiddleware_ValidGroups(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	rbacSvc := rbac.New("sd_creators", "sd_operators", "sd_admins")
-
-	tests := []struct {
-		name           string
-		groups         []string
-		expectedStatus int
-		expectedRole   rbac.Role
-	}{
-		{
-			name:           "Creator group is allowed",
-			groups:         []string{"sd_creators"},
-			expectedStatus: http.StatusOK,
-			expectedRole:   rbac.Creator,
-		},
-		{
-			name:           "Operator group is allowed",
-			groups:         []string{"sd_operators"},
-			expectedStatus: http.StatusOK,
-			expectedRole:   rbac.Operator,
-		},
-		{
-			name:           "Admin group is allowed",
-			groups:         []string{"sd_admins"},
-			expectedStatus: http.StatusOK,
-			expectedRole:   rbac.Admin,
-		},
-		{
-			name:           "Group with leading slash is normalized",
-			groups:         []string{"/sd_creators"},
-			expectedStatus: http.StatusOK,
-			expectedRole:   rbac.Creator,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			router := gin.New()
-			router.Use(func(c *gin.Context) {
-				c.Set(v2.UserIDGroupsContextKey, tt.groups)
-				c.Next()
-			})
-			router.Use(RBACAuthorizationMW(rbacSvc, logger))
-			router.GET("/test", func(c *gin.Context) {
-				role, _ := c.Get(v2.RoleContextKey)
-				assert.Equal(t, tt.expectedRole, role)
-				c.Status(http.StatusOK)
-			})
-
-			req := httptest.NewRequest(http.MethodGet, "/test", nil)
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-			assert.Equal(t, tt.expectedStatus, w.Code)
+	t.Run("valid token stores subject and roles", func(t *testing.T) {
+		token := idp.token(t, func(claims map[string]any) {
+			claims[testUsernameClaim] = "alice"
+			claims[testRolesClaim] = map[string]any{"sd_admins": map[string]any{testOrgID: "otc"}}
 		})
-	}
+
+		var gotUserID any
+		var gotRoles any
+
+		router := gin.New()
+		router.Use(mw)
+		router.GET("/test", func(c *gin.Context) {
+			gotUserID, _ = c.Get(v2.UserIDContextKey)
+			gotRoles, _ = c.Get(v2.UserIDRolesContextKey)
+			c.Status(http.StatusOK)
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "user-1", gotUserID, "the subject is the identity")
+		assert.Equal(t, []string{"sd_admins"}, gotRoles)
+	})
+
+	t.Run("unknown role names yield no roles", func(t *testing.T) {
+		token := idp.token(t, func(claims map[string]any) {
+			claims[testRolesClaim] = map[string]any{"sd_readers": map[string]any{testOrgID: "otc"}}
+		})
+
+		var gotRoles any
+
+		router := gin.New()
+		router.Use(mw)
+		router.GET("/test", func(c *gin.Context) {
+			gotRoles, _ = c.Get(v2.UserIDRolesContextKey)
+			c.Status(http.StatusOK)
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, []string{}, gotRoles)
+	})
+
+	t.Run("token from another issuer returns 401", func(t *testing.T) {
+		foreign := newTestIDP(t)
+		w := performRequestWithAuth(mw, "Bearer "+foreign.token(t, nil))
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+
+	t.Run("token for another audience returns 401", func(t *testing.T) {
+		token := idp.token(t, func(claims map[string]any) { claims["aud"] = "another-client" })
+		w := performRequestWithAuth(mw, "Bearer "+token)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+
+	t.Run("expired token returns 401", func(t *testing.T) {
+		token := idp.token(t, func(claims map[string]any) {
+			claims["exp"] = time.Now().Add(-time.Hour).Unix()
+		})
+		w := performRequestWithAuth(mw, "Bearer "+token)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+
+	t.Run("token signed by an unknown key returns 401", func(t *testing.T) {
+		other := newTestIDP(t)
+		rawClaims, err := json.Marshal(map[string]any{
+			"iss": idp.server.URL,
+			"aud": testClientID,
+			"sub": "user-1",
+			"exp": time.Now().Add(time.Hour).Unix(),
+		})
+		require.NoError(t, err)
+
+		token := oidctest.SignIDToken(other.key, testKeyID, oidc.RS256, string(rawClaims))
+
+		w := performRequestWithAuth(mw, "Bearer "+token)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+
+	t.Run("token without a subject returns 401", func(t *testing.T) {
+		token := idp.token(t, func(claims map[string]any) { delete(claims, "sub") })
+		w := performRequestWithAuth(mw, "Bearer "+token)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
 }
 
-func TestRBACMiddleware_InvalidGroups(t *testing.T) {
+func TestAuthenticationMW_NoProviderConfigured(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	rbacSvc := rbac.New("sd_creators", "sd_operators", "sd_admins")
+	idp := newTestIDP(t)
+
+	t.Run("asymmetric token without an OIDC provider returns 401", func(t *testing.T) {
+		mw := AuthenticationMW(hmacAuthenticator(testHMACSecret), logger)
+		w := performRequestWithAuth(mw, "Bearer "+idp.token(t, nil))
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+
+	t.Run("HMAC token without a secret returns 401", func(t *testing.T) {
+		mw := AuthenticationMW(hmacAuthenticator(""), logger)
+		w := performRequestWithAuth(mw, "Bearer "+hmacToken(t, testHMACSecret, hmacClaims("sd_admins")))
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
+}
+
+func TestRBACAuthorizationMW(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	rbacService := rbac.New(rbac.Config{Creators: "sd_creators", Operators: "sd_operators", Admins: "sd_admins"})
 
 	tests := []struct {
 		name           string
-		groups         []string
-		setGroups      bool
+		roles          []string
+		setRoles       bool
 		expectedStatus int
+		expectedRole   *rbac.Role
 	}{
 		{
-			name:           "Missing groups returns 401",
-			setGroups:      false,
+			name:           "Creator role is allowed",
+			roles:          []string{"sd_creators"},
+			setRoles:       true,
+			expectedStatus: http.StatusOK,
+			expectedRole:   rolePtr(rbac.Creator),
+		},
+		{
+			name:           "Operator role is allowed",
+			roles:          []string{"sd_operators"},
+			setRoles:       true,
+			expectedStatus: http.StatusOK,
+			expectedRole:   rolePtr(rbac.Operator),
+		},
+		{
+			name:           "Admin role is allowed",
+			roles:          []string{"sd_admins"},
+			setRoles:       true,
+			expectedStatus: http.StatusOK,
+			expectedRole:   rolePtr(rbac.Admin),
+		},
+		{
+			name:           "Role with leading slash is normalized",
+			roles:          []string{"/sd_creators"},
+			setRoles:       true,
+			expectedStatus: http.StatusOK,
+			expectedRole:   rolePtr(rbac.Creator),
+		},
+		{
+			name:           "Missing roles in context return 401",
+			setRoles:       false,
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
-			name:           "Empty groups array returns 403",
-			groups:         []string{},
-			setGroups:      true,
+			name:           "Empty roles return 403",
+			roles:          []string{},
+			setRoles:       true,
 			expectedStatus: http.StatusForbidden,
 		},
 		{
-			name:           "Unrecognized groups returns 403",
-			groups:         []string{"random_group", "other_group"},
-			setGroups:      true,
+			name:           "Unrecognized roles return 403",
+			roles:          []string{"random_role", "other_role"},
+			setRoles:       true,
 			expectedStatus: http.StatusForbidden,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var role any
+
 			router := gin.New()
 			router.Use(func(c *gin.Context) {
-				if tt.setGroups {
-					c.Set(v2.UserIDGroupsContextKey, tt.groups)
+				c.Set(v2.UserIDContextKey, "user-1")
+				if tt.setRoles {
+					c.Set(v2.UserIDRolesContextKey, tt.roles)
 				}
 				c.Next()
 			})
-			router.Use(RBACAuthorizationMW(rbacSvc, logger))
+			router.Use(RBACAuthorizationMW(rbacService, logger))
 			router.GET("/test", func(c *gin.Context) {
+				role, _ = c.Get(v2.RoleContextKey)
 				c.Status(http.StatusOK)
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/test", nil)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
+
 			assert.Equal(t, tt.expectedStatus, w.Code)
+			if tt.expectedRole != nil {
+				assert.Equal(t, *tt.expectedRole, role)
+			} else {
+				assert.Nil(t, role, "denied requests must not receive a role")
+			}
 		})
 	}
+
+	t.Run("Roles of an unexpected type return 401", func(t *testing.T) {
+		router := gin.New()
+		router.Use(func(c *gin.Context) {
+			c.Set(v2.UserIDRolesContextKey, "sd_admins")
+			c.Next()
+		})
+		router.Use(RBACAuthorizationMW(rbacService, logger))
+		router.GET("/test", func(c *gin.Context) {
+			c.Status(http.StatusOK)
+		})
+
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
 }
 
-func TestRBACMiddleware_NoClaims(t *testing.T) {
+func TestMiddleware_ZitadelTokenAuthorizesRBAC(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	rbacSvc := rbac.New("sd_creators", "sd_operators", "sd_admins")
-
-	router := gin.New()
-	router.Use(RBACAuthorizationMW(rbacSvc, logger))
-	router.GET("/test", func(c *gin.Context) {
-		c.Status(http.StatusOK)
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
-}
-
-func TestRBACMiddleware_ExtractsUserID(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	rbacSvc := rbac.New("sd_creators", "sd_operators", "sd_admins")
-
-	router := gin.New()
-	router.Use(func(c *gin.Context) {
-		c.Set(v2.UsernameContextKey, "user-12345")
-		c.Set(v2.UserIDGroupsContextKey, []string{"sd_creators"})
-		c.Next()
-	})
-	router.Use(RBACAuthorizationMW(rbacSvc, logger))
-	router.GET("/test", func(c *gin.Context) {
-		userID, exists := c.Get(v2.UsernameContextKey)
-		assert.True(t, exists)
-		assert.Equal(t, "user-12345", userID)
-		c.Status(http.StatusOK)
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestSetGroupsFromClaims(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	idp := newTestIDP(t)
+	rbacService := rbac.New(rbac.Config{Creators: "sd_creators", Operators: "sd_operators", Admins: "sd_admins"})
+	authn := newIDPAuthenticator(t, idp, rbacService.RoleNames()...)
 
 	tests := []struct {
-		name        string
-		claims      jwt.MapClaims
-		expectErr   bool
-		expectCount int
+		name           string
+		roles          map[string]any
+		expectedStatus int
+		expectedRole   *rbac.Role
 	}{
 		{
-			name:        "valid groups",
-			claims:      jwt.MapClaims{"groups": []interface{}{"sd_creators", "sd_operators"}},
-			expectErr:   false,
-			expectCount: 2,
+			name:           "project role resolves to Operator",
+			roles:          map[string]any{"sd_operators": map[string]any{testOrgID: "otc"}},
+			expectedStatus: http.StatusOK,
+			expectedRole:   rolePtr(rbac.Operator),
 		},
 		{
-			name:      "missing groups claim",
-			claims:    jwt.MapClaims{},
-			expectErr: true,
-		},
-		{
-			name:      "groups is not an array",
-			claims:    jwt.MapClaims{"groups": "not-an-array"},
-			expectErr: true,
-		},
-		{
-			name:      "groups contains non-string",
-			claims:    jwt.MapClaims{"groups": []interface{}{"sd_creators", 123}},
-			expectErr: true,
-		},
-		{
-			name:        "empty groups array",
-			claims:      jwt.MapClaims{"groups": []interface{}{}},
-			expectErr:   false,
-			expectCount: 0,
+			name:           "unknown project role is forbidden",
+			roles:          map[string]any{"sd_readers": map[string]any{testOrgID: "otc"}},
+			expectedStatus: http.StatusForbidden,
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			gin.SetMode(gin.TestMode)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token := idp.token(t, func(claims map[string]any) { claims[testRolesClaim] = tt.roles })
+
+			var role any
+
+			router := gin.New()
+			router.Use(AuthenticationMW(authn, logger))
+			router.Use(RBACAuthorizationMW(rbacService, logger))
+			router.GET("/test", func(c *gin.Context) {
+				role, _ = c.Get(v2.RoleContextKey)
+				c.Status(http.StatusOK)
+			})
+
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
 			w := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(w)
+			router.ServeHTTP(w, req)
 
-			err := setGroupsFromClaims(tc.claims, c, logger)
-
-			if tc.expectErr {
-				assert.Error(t, err)
-				return
+			assert.Equal(t, tt.expectedStatus, w.Code)
+			if tt.expectedRole != nil {
+				assert.Equal(t, *tt.expectedRole, role)
+			} else {
+				assert.Nil(t, role, "denied requests must not receive a role")
 			}
-			require.NoError(t, err)
-			val, exists := c.Get(v2.UserIDGroupsContextKey)
-			assert.True(t, exists)
-			groups, ok := val.([]string)
-			require.True(t, ok)
-			assert.Len(t, groups, tc.expectCount)
 		})
 	}
 }
 
-func TestSetUserIDFromClaims(t *testing.T) {
+func TestSetJWTClaims(t *testing.T) {
 	logger := zaptest.NewLogger(t)
+	idp := newTestIDP(t)
 
-	tests := []struct {
-		name      string
-		claims    jwt.MapClaims
-		expectErr bool
-		expectUID string
-	}{
-		{
-			name:      "valid preferred_username",
-			claims:    jwt.MapClaims{"preferred_username": "test-user"},
-			expectErr: false,
-			expectUID: "test-user",
-		},
-		{
-			name:      "missing preferred_username",
-			claims:    jwt.MapClaims{},
-			expectErr: true,
-		},
-		{
-			name:      "preferred_username is not a string",
-			claims:    jwt.MapClaims{"preferred_username": 12345},
-			expectErr: true,
-		},
-	}
+	t.Run("no authorization header passes anonymously", func(t *testing.T) {
+		var exists bool
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			gin.SetMode(gin.TestMode)
-			w := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(w)
-
-			err := setUserIDFromClaims(tc.claims, c, logger)
-
-			if tc.expectErr {
-				assert.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			val, exists := c.Get(v2.UsernameContextKey)
-			assert.True(t, exists)
-			assert.Equal(t, tc.expectUID, val)
+		router := gin.New()
+		router.Use(SetJWTClaims(hmacAuthenticator(testHMACSecret), logger))
+		router.GET("/test", func(c *gin.Context) {
+			_, exists = c.Get(v2.UserIDContextKey)
+			c.Status(http.StatusOK)
 		})
-	}
-}
 
-func TestSetJWTClaims_NoHeader_Passes(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	prov := &auth.Provider{}
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
 
-	mw := SetJWTClaims(prov, logger, "secret")
-	w := performRequestWithAuth(mw, "")
-	assert.Equal(t, http.StatusOK, w.Code)
-}
-
-func TestSetJWTClaims_ValidToken_SetsClaims(t *testing.T) {
-	secret := "optional-auth-secret"
-	logger := zaptest.NewLogger(t)
-	prov := &auth.Provider{}
-
-	claims := jwt.MapClaims{
-		"preferred_username": "opt-user",
-		"groups":             []interface{}{"sd_creators"},
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString([]byte(secret))
-	require.NoError(t, err)
-
-	var capturedUserID interface{}
-	var capturedGroups interface{}
-
-	router := gin.New()
-	router.Use(SetJWTClaims(prov, logger, secret))
-	router.GET("/test", func(c *gin.Context) {
-		capturedUserID, _ = c.Get(v2.UsernameContextKey)
-		capturedGroups, _ = c.Get(v2.UserIDGroupsContextKey)
-		c.Status(http.StatusOK)
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.False(t, exists, "anonymous requests carry no identity")
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("Authorization", "Bearer "+signed)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
+	t.Run("valid Zitadel token sets the identity", func(t *testing.T) {
+		token := idp.token(t, func(claims map[string]any) {
+			claims[testRolesClaim] = map[string]any{"sd_creators": map[string]any{testOrgID: "otc"}}
+		})
 
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "opt-user", capturedUserID)
-	groups, ok := capturedGroups.([]string)
-	require.True(t, ok)
-	assert.Equal(t, []string{"sd_creators"}, groups)
-}
+		var gotUserID any
+		var gotRoles any
 
-func TestSetJWTClaims_InvalidToken_Returns401(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-	prov := &auth.Provider{}
+		router := gin.New()
+		router.Use(SetJWTClaims(newIDPAuthenticator(t, idp, "sd_creators"), logger))
+		router.GET("/test", func(c *gin.Context) {
+			gotUserID, _ = c.Get(v2.UserIDContextKey)
+			gotRoles, _ = c.Get(v2.UserIDRolesContextKey)
+			c.Status(http.StatusOK)
+		})
 
-	mw := SetJWTClaims(prov, logger, "secret")
-	w := performRequestWithAuth(mw, "Bearer invalid-token")
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
-}
+		req := httptest.NewRequest(http.MethodGet, "/test", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
 
-func TestParseToken_RSA_NilProvider_ReturnsError(t *testing.T) {
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "user-1", gotUserID)
+		assert.Equal(t, []string{"sd_creators"}, gotRoles)
+	})
 
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{"sub": "rsa-user"})
-	signed, err := token.SignedString(priv)
-	require.NoError(t, err)
-
-	logger := zaptest.NewLogger(t)
-
-	_, err = parseToken(signed, "", nil, logger)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Keycloak provider is not configured")
+	t.Run("invalid token returns 401", func(t *testing.T) {
+		mw := SetJWTClaims(hmacAuthenticator(testHMACSecret), logger)
+		w := performRequestWithAuth(mw, "Bearer not-a-token")
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	})
 }
 
 func TestCheckEventExistenceMW(t *testing.T) {
@@ -551,23 +575,16 @@ func TestErrorHandle(t *testing.T) {
 	})
 }
 
-func TestIdpTypeFromMethod(t *testing.T) {
-	assert.Equal(t, "local_hmac", idpTypeFromMethod(jwt.SigningMethodHS256))
-	assert.Equal(t, "local_hmac", idpTypeFromMethod(jwt.SigningMethodHS384))
-	assert.Equal(t, "keycloak", idpTypeFromMethod(jwt.SigningMethodRS256))
-	assert.Equal(t, "unknown", idpTypeFromMethod(jwt.SigningMethodES256))
-}
-
 func TestAuthAudit_DoesNotPanic(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 
 	assert.NotPanics(t, func() {
-		authAudit(logger, "token_validation", "success", "local_hmac", "user1", "")
+		authAudit(logger, "token_validation", "success", auth.ProviderZitadel, "user1", "")
 	})
 	assert.NotPanics(t, func() {
 		authAudit(logger, "token_validation", "failure", "", "", "parse_error")
 	})
 	assert.NotPanics(t, func() {
-		authAudit(logger, "authorization", "denied", "", "user2", "no_matching_rbac_group")
+		authAudit(logger, "authorization", "denied", "", "user2", "no_matching_rbac_role")
 	})
 }

@@ -1,6 +1,9 @@
 package rbac
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 type Role int
 
@@ -11,13 +14,22 @@ const (
 	Admin    Role = 50
 )
 
+// Config holds the role names granted by the identity provider. Every field
+// accepts a comma-separated list of names; an empty field leaves the
+// corresponding application role unmapped.
+type Config struct {
+	Creators  string
+	Operators string
+	Admins    string
+}
+
 type Service struct {
 	admins    map[string]struct{}
 	operators map[string]struct{}
 	creators  map[string]struct{}
 }
 
-func parseGroups(input string) map[string]struct{} {
+func parseRoles(input string) map[string]struct{} {
 	m := make(map[string]struct{})
 	for _, part := range strings.Split(input, ",") {
 		part = strings.TrimSpace(part)
@@ -29,51 +41,71 @@ func parseGroups(input string) map[string]struct{} {
 	return m
 }
 
-func New(creatorsGroup, operatorsGroup, adminsGroup string) *Service {
+func New(cfg Config) *Service {
 	return &Service{
-		creators:  parseGroups(creatorsGroup),
-		operators: parseGroups(operatorsGroup),
-		admins:    parseGroups(adminsGroup),
+		creators:  parseRoles(cfg.Creators),
+		operators: parseRoles(cfg.Operators),
+		admins:    parseRoles(cfg.Admins),
 	}
 }
 
-func (s *Service) roleForGroup(group string) Role {
-	if _, ok := s.admins[group]; ok {
+func (s *Service) roleForName(roleName string) Role {
+	if _, ok := s.admins[roleName]; ok {
 		return Admin
 	}
-	if _, ok := s.operators[group]; ok {
+	if _, ok := s.operators[roleName]; ok {
 		return Operator
 	}
-	if _, ok := s.creators[group]; ok {
+	if _, ok := s.creators[roleName]; ok {
 		return Creator
 	}
 	return NoRole
 }
 
-func normalizeGroup(group string) string {
-	return strings.TrimPrefix(group, "/")
+func normalizeRoleName(roleName string) string {
+	return strings.TrimPrefix(roleName, "/")
 }
 
-func (s *Service) HasAuthorizedGroup(userGroups []string) bool {
-	for _, group := range userGroups {
-		g := normalizeGroup(group)
-		if s.roleForGroup(g) != NoRole {
+// RoleNames returns every distinct role name known to the service, sorted.
+func (s *Service) RoleNames() []string {
+	known := []map[string]struct{}{s.creators, s.operators, s.admins}
+	set := make(map[string]struct{}, len(s.creators)+len(s.operators)+len(s.admins))
+	for _, names := range known {
+		for name := range names {
+			set[name] = struct{}{}
+		}
+	}
+
+	names := make([]string, 0, len(set))
+	for name := range set {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	return names
+}
+
+// HasAuthorizedRole reports whether at least one of the role names carried by
+// the token maps to an application role.
+func (s *Service) HasAuthorizedRole(roleNames []string) bool {
+	for _, roleName := range roleNames {
+		if s.roleForName(normalizeRoleName(roleName)) != NoRole {
 			return true
 		}
 	}
 	return false
 }
 
-func (s *Service) ResolveRole(userGroups []string) Role {
+// ResolveRole returns the highest application role granted by the given role names.
+func (s *Service) ResolveRole(roleNames []string) Role {
 	currentRole := NoRole
-	for _, group := range userGroups {
-		g := normalizeGroup(group)
-		r := s.roleForGroup(g)
-		if r == Admin {
+	for _, roleName := range roleNames {
+		role := s.roleForName(normalizeRoleName(roleName))
+		if role == Admin {
 			return Admin
 		}
-		if r > currentRole {
-			currentRole = r
+		if role > currentRole {
+			currentRole = role
 		}
 	}
 	return currentRole

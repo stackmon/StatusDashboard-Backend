@@ -17,7 +17,7 @@ func TestToken_InvalidSignature(t *testing.T) {
 
 	wrongSecretToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"preferred_username": "user-a",
-		"groups":             []interface{}{creatorGroup},
+		"groups":             []interface{}{creatorRole},
 	})
 	invalidToken, err := wrongSecretToken.SignedString([]byte("wrong-secret"))
 	require.NoError(t, err)

@@ -29,9 +29,9 @@ const (
 )
 
 const (
-	UsernameContextKey     = "userID"
-	UserIDGroupsContextKey = "userIDGroups"
-	RoleContextKey         = "role"
+	UserIDContextKey      = "userID"
+	UserIDRolesContextKey = "userIDRoles"
+	RoleContextKey        = "role"
 )
 
 type IncidentID struct {
@@ -161,23 +161,23 @@ func parsePaginationParams(c *gin.Context, params *db.IncidentsParams) error {
 	return nil
 }
 
-// hasExtendedView checks if user has a resolved role above NoRole (authenticated and authorized via RBAC).
+// hasExtendedView checks if the caller holds a role above NoRole (authenticated and authorized via RBAC).
 func hasExtendedView(c *gin.Context, svc *rbac.Service) bool {
 	if svc == nil {
 		return false
 	}
 
-	val, exists := c.Get(UserIDGroupsContextKey)
+	val, exists := c.Get(UserIDRolesContextKey)
 	if !exists {
 		return false
 	}
 
-	groups, ok := val.([]string)
-	if !ok || len(groups) == 0 {
+	roles, ok := val.([]string)
+	if !ok || len(roles) == 0 {
 		return false
 	}
 
-	return svc.HasAuthorizedGroup(groups)
+	return svc.HasAuthorizedRole(roles)
 }
 
 func GetIncidentsHandler(dbInst *db.DB, logger *zap.Logger, svc *rbac.Service) gin.HandlerFunc {
@@ -1838,7 +1838,7 @@ func getRoleFromContext(c *gin.Context, logger *zap.Logger) (rbac.Role, bool) {
 }
 
 func getUserIDFromContext(c *gin.Context) *string {
-	if userID, exists := c.Get(UsernameContextKey); exists {
+	if userID, exists := c.Get(UserIDContextKey); exists {
 		if uid, ok := userID.(string); ok && uid != "" {
 			return &uid
 		}
@@ -1934,6 +1934,7 @@ func prepareIncidentCreate(c *gin.Context, logger *zap.Logger, incData *Incident
 		if !ok {
 			return false
 		}
+
 		status, err := resolveMaintenanceCreateStatus(role)
 		if err != nil {
 			apiErrors.RaiseForbiddenErr(c, err)

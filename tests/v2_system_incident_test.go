@@ -62,7 +62,7 @@ import (
 // TestV2SystemIncidentCreationWrongType tests that system incidents must be of type 'incident'.
 func TestV2SystemIncidentCreationWrongType(t *testing.T) {
 	t.Log("Test: system incident creation with wrong type")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// Clean up any open incidents
 	cleanupOpenIncidents(t, r)
@@ -117,7 +117,7 @@ func TestV2SystemIncidentCreationWrongType(t *testing.T) {
 // TestV2SystemIncidentCreationNoActiveEvents tests creating system incident when component has no active events.
 func TestV2SystemIncidentCreationNoActiveEvents(t *testing.T) {
 	t.Log("Test: system incident creation for component with no active events")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// Clean up any open incidents
 	cleanupOpenIncidents(t, r)
@@ -158,7 +158,7 @@ func TestV2SystemIncidentCreationNoActiveEvents(t *testing.T) {
 // TestV2SystemIncidentCreationWithMaintenance tests that component in maintenance cannot have system incident.
 func TestV2SystemIncidentCreationWithMaintenance(t *testing.T) {
 	t.Log("Test: system incident creation for component in maintenance")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// Clean up any open incidents
 	cleanupOpenIncidents(t, r)
@@ -212,7 +212,7 @@ func TestV2SystemIncidentCreationWithMaintenance(t *testing.T) {
 // TestV2SystemIncidentCreationWithNonSystemIncident tests that existing non-system incident is returned.
 func TestV2SystemIncidentCreationWithNonSystemIncident(t *testing.T) {
 	t.Log("Test: system incident creation when non-system incident exists")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// Clean up any open incidents
 	cleanupOpenIncidents(t, r)
@@ -267,7 +267,7 @@ func TestV2SystemIncidentCreationWithNonSystemIncident(t *testing.T) {
 // TestV2SystemIncidentSameImpact tests component with system incident of same impact, should return existing incident.
 func TestV2SystemIncidentSameImpact(t *testing.T) {
 	t.Log("Test: system incident creation when system incident with same impact exists")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// Clean up any open incidents
 	cleanupOpenIncidents(t, r)
@@ -316,7 +316,7 @@ func TestV2SystemIncidentSameImpact(t *testing.T) {
 // TestV2SystemIncidentHigherImpact tests component with system incident of higher impact, should return existing incident.
 func TestV2SystemIncidentHigherImpact(t *testing.T) {
 	t.Log("Test: system incident creation when system incident with higher impact exists")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// Clean up any open incidents
 	cleanupOpenIncidents(t, r)
@@ -371,7 +371,7 @@ func TestV2SystemIncidentHigherImpact(t *testing.T) {
 // The incident impact should be updated in place. Without any new incident created or component extraction.
 func TestV2SystemIncidentLowerImpactSingleComponent(t *testing.T) {
 	t.Log("Test: system incident creation when system incident with lower impact exists (single component)")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// Clean up any open incidents
 	cleanupOpenIncidents(t, r)
@@ -431,7 +431,7 @@ func TestV2SystemIncidentLowerImpactSingleComponent(t *testing.T) {
 // TestV2SystemIncidentLowerImpactMultiComponent tests moving component from lower to higher impact (multi component).
 func TestV2SystemIncidentLowerImpactMultiComponent(t *testing.T) {
 	t.Log("Test: system incident creation when system incident with lower impact exists (multiple components)")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// Clean up any open incidents
 	cleanupOpenIncidents(t, r)
@@ -504,7 +504,7 @@ func TestV2SystemIncidentLowerImpactMultiComponent(t *testing.T) {
 // TestV2SystemIncidentReuseExisting tests that existing system incident with target impact is reused.
 func TestV2SystemIncidentReuseExisting(t *testing.T) {
 	t.Log("Test: system incident reuses existing system incident with target impact")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// Clean up any open incidents
 	cleanupOpenIncidents(t, r)
@@ -570,7 +570,7 @@ func TestV2SystemIncidentReuseExisting(t *testing.T) {
 // TestV2SystemIncidentMultipleComponents tests creating system incident for multiple components simultaneously.
 func TestV2SystemIncidentMultipleComponents(t *testing.T) {
 	t.Log("Test: system incident creation for multiple components")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// Clean up any open incidents
 	cleanupOpenIncidents(t, r)
@@ -611,7 +611,7 @@ func TestV2SystemIncidentMultipleComponents(t *testing.T) {
 // TestV2SystemIncidentMixedScenarios tests mixed scenarios with multiple components.
 func TestV2SystemIncidentMixedScenarios(t *testing.T) {
 	t.Log("Test: system incident creation with mixed scenarios")
-	r, _, _ := initTests(t)
+	r, _ := initTests(t)
 
 	// Clean up any open incidents
 	cleanupOpenIncidents(t, r)

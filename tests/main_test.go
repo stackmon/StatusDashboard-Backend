@@ -26,7 +26,6 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/api"
 	"github.com/stackmon/otc-status-dashboard/internal/api/auth"
 	apiErrors "github.com/stackmon/otc-status-dashboard/internal/api/errors"
-	"github.com/stackmon/otc-status-dashboard/internal/api/rbac"
 	v1 "github.com/stackmon/otc-status-dashboard/internal/api/v1"
 	v2 "github.com/stackmon/otc-status-dashboard/internal/api/v2"
 	"github.com/stackmon/otc-status-dashboard/internal/conf"
@@ -107,7 +106,7 @@ func applyMigrations(dbURL string) error {
 	return nil
 }
 
-func initTests(t *testing.T) (*gin.Engine, *db.DB, *auth.Provider) {
+func initTests(t *testing.T) (*gin.Engine, *db.DB) {
 	t.Helper()
 	t.Log("init structs")
 
@@ -125,46 +124,26 @@ func initTests(t *testing.T) (*gin.Engine, *db.DB, *auth.Provider) {
 
 	logger, _ := zap.NewDevelopment()
 
-	// Provide RBAC group names and local HMAC secret so conf.Validate() passes.
+	// Provide RBAC role names and the local HMAC secret so conf.Validate() passes.
 	t.Setenv("SD_SECRET_KEY", testHMACSecret)
-	t.Setenv("SD_RBAC_GROUPS_CREATORS", creatorGroup)
-	t.Setenv("SD_RBAC_GROUPS_OPERATORS", operatorGroup)
-	t.Setenv("SD_RBAC_GROUPS_ADMINS", adminGroup)
+	t.Setenv("SD_RBAC_GROUPS_CREATORS", creatorRole)
+	t.Setenv("SD_RBAC_GROUPS_OPERATORS", operatorRole)
+	t.Setenv("SD_RBAC_GROUPS_ADMINS", adminRole)
 
 	cfg, err := conf.LoadConf()
 	require.NoError(t, err)
 
-	// Create Keycloak provider only when configured (mirrors production api.go logic).
-	var oa2Prov *auth.Provider
-	if cfg.Keycloak != nil && cfg.Keycloak.URL != "" {
-		oa2Prov, err = auth.NewProvider(cfg.Keycloak.URL, cfg.Keycloak.Realm, cfg.Keycloak.ClientID, cfg.Keycloak.ClientSecret, cfg.Hostname, cfg.WebURL)
-		require.NoError(t, err)
-	}
+	// SD_OIDC_ISSUER is not set here, so the tests exercise the transitional
+	// local HMAC branch, like a deployment without Zitadel configured.
+	authn := auth.NewAuthenticator(nil, cfg.SecretKeyV1)
 
-	initRoutesAuth(t, r, oa2Prov, logger)
-	initRoutesV1(t, r, d, oa2Prov, logger)
-	initRoutesV2(t, r, d, oa2Prov, logger)
+	initRoutesV1(t, r, d, authn, logger)
+	initRoutesV2(t, r, d, authn, logger)
 
-	return r, d, oa2Prov
+	return r, d
 }
 
-func initRoutesAuth(t *testing.T, c *gin.Engine, oa2Prov *auth.Provider, logger *zap.Logger) {
-	t.Helper()
-	if oa2Prov == nil {
-		t.Log("skipping auth routes: no Keycloak provider configured")
-		return
-	}
-	t.Log("init routes for auth")
-
-	authAPI := c.Group("auth")
-
-	authAPI.GET("login", auth.GetLoginPageHandler(oa2Prov, logger))
-	authAPI.GET("callback", auth.GetCallbackHandler(oa2Prov, logger))
-	authAPI.POST("token", auth.PostTokenHandler(oa2Prov, logger))
-	authAPI.POST("logout", auth.PostTokenHandler(oa2Prov, logger))
-}
-
-func initRoutesV1(t *testing.T, c *gin.Engine, dbInst *db.DB, prov *auth.Provider, logger *zap.Logger) {
+func initRoutesV1(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Authenticator, logger *zap.Logger) {
 	t.Helper()
 	t.Log("init routes for V1")
 
@@ -172,82 +151,82 @@ func initRoutesV1(t *testing.T, c *gin.Engine, dbInst *db.DB, prov *auth.Provide
 
 	v1Api.GET("component_status", v1.GetComponentsStatusHandler(dbInst, logger))
 	v1Api.POST("component_status",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		v1.PostComponentStatusHandler(dbInst, logger))
 
 	v1Api.GET("incidents", v1.GetIncidentsHandler(dbInst, logger))
 }
 
-func initRoutesV2(t *testing.T, c *gin.Engine, dbInst *db.DB, prov *auth.Provider, logger *zap.Logger) {
+func initRoutesV2(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Authenticator, logger *zap.Logger) {
 	t.Helper()
 	t.Log("init routes for V2")
 
-	rbacSvc := rbac.New(creatorGroup, operatorGroup, adminGroup)
+	rbacSvc := testRBACService()
 
 	v2Api := c.Group("v2")
 
 	v2Api.GET("components", v2.GetComponentsHandler(dbInst, logger))
 	v2Api.POST("components",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		v2.PostComponentHandler(dbInst, logger))
 	v2Api.GET("components/:id", v2.GetComponentHandler(dbInst, logger))
 
 	// Incidents routes (deprecated).
 	v2Api.GET("incidents",
-		api.SetJWTClaims(prov, logger, testHMACSecret),
+		api.SetJWTClaims(authn, logger),
 		v2.GetIncidentsHandler(dbInst, logger, rbacSvc))
 	v2Api.POST("incidents",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.ValidateComponentsMW(dbInst, logger),
 		v2.PostIncidentHandler(dbInst, logger))
 	v2Api.GET("incidents/:eventID",
-		api.SetJWTClaims(prov, logger, testHMACSecret),
+		api.SetJWTClaims(authn, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		v2.GetIncidentHandler(dbInst, logger, rbacSvc))
 	v2Api.PATCH("incidents/:eventID",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		v2.PatchIncidentHandler(dbInst, logger))
 	v2Api.POST("incidents/:eventID/extract",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		api.ValidateComponentsMW(dbInst, logger),
 		v2.PostIncidentExtractHandler(dbInst, logger))
 	v2Api.PATCH("incidents/:eventID/updates/:updateID",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		v2.PatchEventUpdateTextHandler(dbInst, logger))
 
 	// Events routes.
 	v2Api.GET("events",
-		api.SetJWTClaims(prov, logger, testHMACSecret),
+		api.SetJWTClaims(authn, logger),
 		v2.GetEventsHandler(dbInst, logger, rbacSvc))
 	v2Api.POST("events",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.ValidateComponentsMW(dbInst, logger),
 		v2.PostIncidentHandler(dbInst, logger))
 	v2Api.GET("events/:eventID",
-		api.SetJWTClaims(prov, logger, testHMACSecret),
+		api.SetJWTClaims(authn, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		v2.GetIncidentHandler(dbInst, logger, rbacSvc))
 	v2Api.PATCH("events/:eventID",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		v2.PatchIncidentHandler(dbInst, logger))
 	v2Api.POST("events/:eventID/extract",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		api.ValidateComponentsMW(dbInst, logger),
 		v2.PostIncidentExtractHandler(dbInst, logger))
 	v2Api.PATCH("events/:eventID/updates/:updateID",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		v2.PatchEventUpdateTextHandler(dbInst, logger))

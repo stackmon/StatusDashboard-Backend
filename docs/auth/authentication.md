@@ -1,138 +1,104 @@
 # Authentication
 
-In this section we focus on the authentication for frontend SPA. The main focus here - the security.
+The backend is a pure OIDC **resource server**: it never issues, refreshes or stores
+tokens. Clients (the frontend SPA, and service principals such as `metrics-processor`)
+obtain access tokens directly from Zitadel and present them as bearer tokens.
 
-For this approach we don't need share any information about keycloak client. The FE doesn't need to know any urls and secrets.
+## Login flow
 
-The general schema presented here
+The frontend is a public OIDC client of the Zitadel project and uses Authorization Code
+with PKCE (`oidc-client-ts`). No client secret is shared with the browser.
 
-[authentication schema source file](./authentication.drawio)
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User (browser)
+    participant FE as Frontend SPA (Relying Party)
+    participant Z as Zitadel
+    participant BE as Backend (Resource Server)
 
-![authentication_schema](./authentication.png)
-
-## Details
-
-### The first step on the frontend part
-
-Our backend expects the base64 encoded JSON object. In this object should be minimum 2 fields: { "callback_url": callbackURL, "code_challenge": codeChallenge }.
-
-The `callback_url` is the url for the redirected page from backend. It's used for redirect after successful authorisation.
-
-The `code_challenge` is the SHA256 hash for `code_verifier` code. 
-
-The `code_verifier` is needed for proving the access to the stored access tokens on the last step.
-
-And the `code_verifier` should be stored in the local (or if possible session) browser storage.
-
-Example:
-
-```js
-      // imagine, the login page is http://frontend_url/login
-      
-      const originalUrl = window.location.href;
-      const url = originalUrl.substring(0, originalUrl.indexOf("/login"));
-      
-      // the callback url for processing the response from backend
-      const callbackURL = `${url}/callback`
-
-      const codeVerifier = generateCodeVerifier()
-      localStorage.setItem('code_verifier', codeVerifier);
-
-      let codeChallenge = CryptoJS.SHA256(codeVerifier).toString(CryptoJS.enc.Hex);
-      let stateObj = JSON.stringify({ "callback_url": callbackURL, "code_challenge": codeChallenge })
-
-      const state = btoa(stateObj).replace(/=+$/, '');
-
-      // Redirect to the backend's login endpoint
-      window.location.href = `http://backend_url/auth/login?state=${state}`;
+    U->>FE: open the application
+    FE->>Z: authorization request (PKCE, code_challenge)
+    Z->>U: login page
+    U->>Z: credentials (+ MFA)
+    Z->>FE: redirect to the frontend callback with ?code
+    FE->>Z: token request (code + code_verifier, no secret)
+    Z->>FE: access token (RS256)
+    FE->>BE: API request, Authorization: Bearer <access token>
+    BE->>BE: verify signature, issuer, audience, expiry
+    BE->>FE: 200 / 401 / 403
 ```
 
-The last line redirects to the backend endpoint, which generates the auth URL and redirects to it.
+## Token validation
 
-Example:
+Every request that carries a bearer token is validated:
 
-```go
-func startLogin(c *gin.Context) {
-	// Generate OAuth2 login URL
-	state := c.Query("state")
-	oauthURL := oauth2Config.AuthCodeURL(state)
-	c.Redirect(http.StatusFound, oauthURL)
-}
-```
+1. **Algorithm dispatch** — the JWT `alg` header selects the provider:
+   - `RS256` → the configured OIDC provider (Zitadel)
+   - `HS256` / `HS384` / `HS512` → the transitional local HMAC provider (`SD_SECRET_KEY`)
+   - anything else (including `none`) is rejected
+2. **OIDC verification** (`coreos/go-oidc`) — the issuer discovery document and JWKS are fetched
+   once at startup and refreshed on demand when an unknown `kid` is seen, then the signature,
+   `iss`, `aud` and `exp` claims are checked.
+3. **Subject** — a token without a `sub` claim is rejected; the subject is the user identity.
+4. **Roles** — role names are read from the claim named by `SD_OIDC_ROLES_CLAIM`, keeping only
+   the names the resource server knows (`SD_RBAC_GROUPS_*`). See [rbac.md](rbac.md).
+5. **Audit logging** — every outcome is logged with `idp_type`, `username`, `result` and `reason`.
 
-### The tokens processing
-
-After the successful authorisation, the keycloak redirects to the backend callback url with `code` and `state` url query params. 
-The backend extracts tokens from `code`, the `code_challenge` and `callback_url` from `state` and save the data in the local storage or cache. 
-The key for tokens is `code_challenge`. After all the backend redirects to the `callback_url`.
-
-### Retrieve data for frontend
-
-After the backend redirected to the frontend `callback_url` the frontend should extract the `code_verifier` from the local or session storage. 
-Then the frontend should send a POST request to the backend's token url
-
-Example:
-```js
-    handleCallback() {
-        const codeVerifier = localStorage.getItem("code_verifier");
-        if (codeVerifier == null) {
-          console.error("invalid code_verifier");
-          return;
-        }
-
-      let config = {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      };
-      axios.post("http://backend_url/auth/token", {"code_verifier": codeVerifier}, config)
-    }
-```
-The backend calculates the SHA256 for `code_verifier` and extract saved data from cache or local storage. And return user tokens.
-
-# Authentication middleware
-
-The backend validates all incoming requests via a dual-IdP middleware chain:
-
-1. **Token extraction**: `Authorization: Bearer <token>` header is parsed.
-2. **Key selection**: Based on the JWT `alg` header:
-   - `RS256` → Keycloak RSA public key (fetched from JWKS endpoint, cached in memory)
-   - `HS256` / `HS384` / `HS512` → `SD_SECRET_KEY` (local HMAC)
-3. **Signature verification**: `jwt-go/v5` validates the signature.
-4. **Claims extraction**: `preferred_username` → user ID, `groups` → RBAC role resolution.
-5. **Audit logging**: Every auth attempt is logged with `idp_type`, `username`, `result`, and `reason`.
-
-### Two middleware variants
+### Middleware variants
 
 | Middleware | Behavior on missing/invalid token | Used for |
 |-----------|----------------------------------|----------|
 | `AuthenticationMW` (hard-auth) | Returns `401 Unauthorized` | Write endpoints (POST, PATCH) |
 | `SetJWTClaims` (soft-auth) | Continues without user context | Read endpoints (GET) |
 
-Both share a common `validateAndSetClaims()` helper (DRY).
+Both delegate to a shared `authenticate()` helper.
 
-### Configuration
+## Configuration
 
-At least one provider must be configured — otherwise the application fails to start.
+At least one provider must be configured — otherwise the application fails to start with a
+clear error.
 
 | Variable | Provider | Required |
 |----------|----------|----------|
-| `SD_SECRET_KEY` | Local HMAC | At least one of HMAC or Keycloak |
-| `SD_KEYCLOAK_URL` | Keycloak RSA | At least one of HMAC or Keycloak |
-| `SD_KEYCLOAK_REALM` | Keycloak RSA | When Keycloak configured |
-| `SD_KEYCLOAK_CLIENT_ID` | Keycloak RSA | When Keycloak configured |
-| `SD_KEYCLOAK_CLIENT_SECRET` | Keycloak RSA | When Keycloak configured |
+| `SD_OIDC_ISSUER` | OIDC (Zitadel) | At least one of OIDC or HMAC |
+| `SD_OIDC_CLIENT_ID` | OIDC (Zitadel) | When OIDC configured |
+| `SD_OIDC_ROLES_CLAIM` | OIDC (Zitadel) | No — defaults to `urn:zitadel:iam:org:project:roles` |
+| `SD_OIDC_USERNAME_CLAIM` | OIDC (Zitadel) | No — display name only, never used for identity |
+| `SD_SECRET_KEY` | Local HMAC | At least one of OIDC or HMAC |
 
-`SD_SECRET_KEY` must be ≥ 32 characters. `SD_AUTHENTICATION_DISABLED` has been removed.
-
-# How to get a token locally
+Example:
 
 ```shell
-curl -X POST   http://localhost:8080/realms/myapp/protocol/openid-connect/token   \
--H "Content-Type: application/x-www-form-urlencoded"   \
--d "grant_type=password"   \
--d "client_id=client"   \
--d "username=user"   \
--d "password=user" \
--d "client_secret=secret"
+SD_OIDC_ISSUER=https://zitadel.eco-preprod.tsi-dev.otc-service.com
+SD_OIDC_CLIENT_ID=390700708019568682
 ```
+
+`SD_OIDC_ISSUER` and `SD_OIDC_CLIENT_ID` are validated together: setting only one of them is a
+startup error, and the discovered issuer must match `SD_OIDC_ISSUER` exactly.
+
+`SD_OIDC_CLIENT_ID` is the **audience** every accepted token must be issued to. Zitadel access
+tokens always contain the project id in `aud`, so pointing `SD_OIDC_CLIENT_ID` at the project id
+accepts every application of that project. Use a specific client id instead to accept only the
+tokens issued to that client.
+
+`SD_SECRET_KEY` must be >= 32 characters. It only exists for the transition period and will be
+removed once `metrics-processor` authenticates as a Zitadel service user (see the migration note
+in `agent/notes`). `SD_AUTHENTICATION_DISABLED` has been removed.
+
+## Getting a token locally
+
+Interactive tokens come from the browser flow above. For service-to-service calls use a Zitadel
+service user with `client_credentials`, and request the project audience so the token carries the
+project in `aud`:
+
+```shell
+curl -X POST "$SD_OIDC_ISSUER/oauth/v2/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials" \
+  -d "client_id=$SERVICE_USER_CLIENT_ID" \
+  -d "client_secret=$SERVICE_USER_SECRET" \
+  -d "scope=openid urn:zitadel:iam:org:project:id:$PROJECT_ID:aud"
+```
+
+The returned `access_token` is then sent as a bearer token in the `Authorization` header.

@@ -10,20 +10,9 @@ services:
       - "5432:5432"
     volumes:
       - db:/var/lib/postgresql/data
-  keycloak:
-    container_name: keycloak
-    image: quay.io/keycloak/keycloak:26.0.6
-    environment:
-      - KC_BOOTSTRAP_ADMIN_USERNAME=admin
-      - KC_BOOTSTRAP_ADMIN_PASSWORD=admin
-      - KC_HOSTNAME=localhost
-      - KC_LOG_CONSOLE_LEVEL=all
-    ports:
-      - "8080:8080"
-    volumes:
-      - keycloak:/opt/keycloak/data/
-    command: start-dev
+
+# Identity is provided by the external Zitadel instance
+# (SD_OIDC_ISSUER / SD_OIDC_CLIENT_ID); no local IdP container is started.
 
 volumes:
   db:
-  keycloak:

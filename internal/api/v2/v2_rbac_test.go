@@ -195,7 +195,7 @@ func TestAllowMaintenancePatch(t *testing.T) {
 
 			// Set up user context for creator tests
 			userID := "test-user-123"
-			c.Set(UsernameContextKey, userID)
+			c.Set(UserIDContextKey, userID)
 
 			stored := &db.Incident{
 				Status:    tc.storedStatus,
@@ -275,7 +275,7 @@ func TestAllowMaintenancePatchAsCreator(t *testing.T) {
 
 			// Set up user context
 			userID := "test-user-123"
-			c.Set(UsernameContextKey, userID)
+			c.Set(UserIDContextKey, userID)
 
 			stored := &db.Incident{
 				Status:    tc.storedStatus,
@@ -405,7 +405,7 @@ func TestGetUserIDFromContext(t *testing.T) {
 			c, _ := gin.CreateTestContext(w)
 
 			if tc.setValue {
-				c.Set(UsernameContextKey, tc.value)
+				c.Set(UserIDContextKey, tc.value)
 			}
 
 			result := getUserIDFromContext(c)
@@ -522,7 +522,7 @@ func TestAllowMaintenancePatchAsCreatorOwnership(t *testing.T) {
 			logger := zap.NewNop()
 
 			if tc.setUser {
-				c.Set(UsernameContextKey, tc.userID)
+				c.Set(UserIDContextKey, tc.userID)
 			}
 
 			stored := &db.Incident{

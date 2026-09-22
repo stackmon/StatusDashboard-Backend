@@ -7,11 +7,21 @@ info:
 
     ## Authentication & Field Visibility
 
-    The API supports two simultaneous identity providers:
-    - **Keycloak (RSA)**: RS256 tokens validated against JWKS public key. Audience (`aud`) claim must match the configured client ID.
-    - **Local HMAC**: HS256/HS384/HS512 tokens validated against `SD_SECRET_KEY` (≥ 32 characters). Used for development, tests, and service-to-service calls.
+    The API is an OIDC resource server. Bearer tokens are validated against the
+    configured OIDC provider (Zitadel) using its discovery document and JWKS:
 
-    At least one provider must be configured. The `alg` header in the JWT determines which provider validates the token.
+    - **Issuer**: `SD_OIDC_ISSUER` — must expose `/.well-known/openid-configuration`
+    - **Audience**: `SD_OIDC_CLIENT_ID` — every accepted token must be issued to this client
+    - **Roles**: the claim named by `SD_OIDC_ROLES_CLAIM` (default
+      `urn:zitadel:iam:org:project:roles`)
+
+    A transitional local HMAC provider (HS256/HS384/HS512 against `SD_SECRET_KEY`,
+    ≥ 32 characters) is still accepted for development, tests and
+    service-to-service calls; it will be removed once the metrics processor
+    authenticates as a Zitadel service user. At least one provider must be
+    configured, and the JWT `alg` header determines which one validates a token.
+    Clients obtain tokens directly from the identity provider; this API never
+    mints, refreshes or stores them.
 
     Some fields are only visible to authenticated users:
     - `creator` - User ID of the event creator
@@ -31,8 +41,8 @@ info:
     ## Role-Based Access Control (RBAC)
 
     The API implements RBAC with three roles (highest to lowest privilege).
-    Role names are abstract application roles mapped from IdP group names via `SD_RBAC_GROUPS_*`
-    environment variables.
+    Role names are abstract application roles mapped from the role names carried
+    by the roles claim of the token via the `SD_RBAC_GROUPS_*` environment variables.
 
     | Role | Permissions |
     |------|-------------|
@@ -40,10 +50,10 @@ info:
     | `operator` | Full CRUD access to all maintenance events (event admin) — unrestricted status transitions, create events (status: `planned`), cancel from any status |
     | `creator` | Create maintenance events (status: `pending_review`), modify/cancel own events in `pending_review` only |
 
-    Roles are resolved from the JWT `groups` claim, matched against:
-    - `SD_RBAC_GROUPS_ADMINS` (mandatory) — IdP group name that maps to the `admin` role
-    - `SD_RBAC_GROUPS_OPERATORS` (optional) — IdP group name that maps to the `operator` role
-    - `SD_RBAC_GROUPS_CREATORS` (optional) — IdP group name that maps to the `creator` role
+    Roles are resolved from the roles claim, matched against:
+    - `SD_RBAC_GROUPS_ADMINS` (mandatory) — role name that maps to the `admin` role
+    - `SD_RBAC_GROUPS_OPERATORS` (optional) — role name that maps to the `operator` role
+    - `SD_RBAC_GROUPS_CREATORS` (optional) — role name that maps to the `creator` role
 
     RBAC is always active — there is no disable toggle.
 
@@ -53,8 +63,6 @@ info:
 servers:
   - url: http://localhost:8000
 tags:
-  - name: authentication
-    description: Authentication operations
   - name: incidents
     description: Incident management
   - name: events
@@ -66,127 +74,6 @@ tags:
 security:
   - BearerAuth: []
 paths:
-  /auth/login:
-    get:
-      summary: Redirect to the keycloak auth realm.
-      tags:
-        - authentication
-      parameters:
-        - name: state
-          in: query
-          description: The state for oauth2 request. It's a base64 encoded JSON object. The object should contain the `code_challenge` and `callback_url`.
-          required: true
-          schema:
-            type: string
-            example: eyJjb2RlX2NoYWxsZW5nZSI6IjY0Y2MwYWIxYTg4ZWZlYWNkNjRmYTc5ZWNlMzRlZGUwNDRjZDZkMWMzMmMyYTFjMjc5MWU1YmEyMDYzYzFiZWEiLCJjYWxsYmFja191cmwiOiJodHRwOi8vbG9jYWxob3N0OjUxNzMvY2FsbGJhY2sifQ
-      responses:
-        "303":
-          description: The redirect to a keycloak auth page.
-        "400":
-          description: The request is invalid.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/BadRequestGeneralError"
-  /auth/callback:
-    get:
-      summary: The callback URL for the keycloak auth realm. It exchanges the code from keycloak and store tokens for a user. It redirects to the frontend callback URL from the state parameter.
-      tags:
-        - authentication
-      parameters:
-        - name: code
-          in: query
-          description: The code from the keycloak auth realm.
-          required: true
-          schema:
-            type: string
-            example: 7b3b3b3b-3b3b-3b3b-3b3b-3b3b3b3b3b3b
-        - name: state
-          in: query
-          description: The state from the authentication request.
-          required: true
-          schema:
-            type: string
-            example: eyJjb2RlX2NoYWxsZW5nZSI6IjY0Y2MwYWIxYTg4ZWZlYWNkNjRmYTc5ZWNlMzRlZGUwNDRjZDZkMWMzMmMyYTFjMjc5MWU1YmEyMDYzYzFiZWEiLCJjYWxsYmFja191cmwiOiJodHRwOi8vbG9jYWxob3N0OjUxNzMvY2FsbGJhY2sifQ
-      responses:
-        "303":
-          description: The redirect to a frontend callback url.
-        "400":
-          description: Return this code with a redirect to a frontend url.
-          headers:
-            Set-Cookie:
-              description: Error cookie set by the server.
-              schema:
-                type: string
-                example: error=some_error_message; Path=/; HttpOnly
-  /auth/token:
-    post:
-      summary: Retrieve a token for an authorised client.
-      tags:
-        - authentication
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/TokenPostRequest"
-        required: true
-      responses:
-        "200":
-          description: Return access and refresh tokens for a user.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TokenPostResponse"
-        "400":
-          description: The request is invalid.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/BadRequestGeneralError"
-  /auth/logout:
-    put:
-      summary: Logout user session.
-      tags:
-        - authentication
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/TokenPutRequest"
-        required: true
-      responses:
-        "204":
-          description: The request is successful.
-        "400":
-          description: The request is invalid.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/BadRequestGeneralError"
-  /auth/refresh:
-    post:
-      summary: Refresh an access token using a refresh token.
-      tags:
-        - authentication
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/TokenRefreshRequest"
-        required: true
-      responses:
-        "200":
-          description: Return new access and refresh tokens.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TokenPostResponse"
-        "400":
-          description: The request is invalid.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/BadRequestGeneralError"
   /v2/components:
     get:
       summary: Get all components.
@@ -685,36 +572,6 @@ paths:
 
 components:
   schemas:
-    TokenPostRequest:
-      type: object
-      required:
-        - code_verifier
-      properties:
-        code_verifier:
-          type: string
-          example: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-    TokenPostResponse:
-      type: object
-      properties:
-        access_token:
-          type: string
-        refresh_token:
-          type: string
-    TokenPutRequest:
-      type: object
-      required:
-        - refresh_token
-      properties:
-        refresh_token:
-          type: string
-    TokenRefreshRequest:
-      type: object
-      required:
-        - refresh_token
-      properties:
-        refresh_token:
-          type: string
-          example: "eyJhbGciOiJIUzUxMiIsInR5cCIgOiAiSldUIiwia2lkIiA6ICJjOTBjZjFhOC1kNjcxLTRjNzktYTBlYi0yYmI3Y2M2NThiNzIifQ..."
     Component:
       type: object
       required:
@@ -1268,5 +1125,6 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: |
-        JWT token from Keycloak (RS256) or Local HMAC (HS256/HS384/HS512).
+        JWT bearer token issued by the configured OIDC provider (Zitadel), or by
+        the transitional local HMAC provider.
         Include in Authorization header as "Bearer <token>".

@@ -81,12 +81,12 @@ paths:
       summary: Get status
     post:
       summary: Create status
-  /auth/login:
-    post:
-      summary: Login
+  /write-only:
+    put:
+      summary: Write only
 tags:
   - name: Status
-  - name: Auth
+  - name: Write
 security:
   - bearerAuth: []
 components:
@@ -135,7 +135,7 @@ components:
 
 	paths := requireMap(t, result, "paths")
 	assert.Contains(t, paths, "/status")
-	assert.NotContains(t, paths, "/auth/login")
+	assert.NotContains(t, paths, "/write-only")
 
 	statusMethods := requireMap(t, paths, "/status")
 	assert.Contains(t, statusMethods, "get")
@@ -203,7 +203,7 @@ func TestStripNonGetMethods_NormalPaths(t *testing.T) {
 func TestFilterGETPaths(t *testing.T) {
 	t.Parallel()
 	paths := map[string]interface{}{
-		"/auth/token":  map[string]interface{}{"post": "login"},
+		"/write-only":  map[string]interface{}{"put": "update"},
 		"/bad":         "not-a-map",
 		"/no-get":      map[string]interface{}{"post": "create"},
 		"/has-get":     map[string]interface{}{"get": map[string]interface{}{"tags": []interface{}{"Public"}}},
@@ -212,7 +212,7 @@ func TestFilterGETPaths(t *testing.T) {
 
 	filtered, usedTags := filterGETPaths(paths)
 
-	assert.NotContains(t, filtered, "/auth/token")
+	assert.NotContains(t, filtered, "/write-only")
 	assert.NotContains(t, filtered, "/bad")
 	assert.NotContains(t, filtered, "/no-get")
 	assert.Contains(t, filtered, "/has-get")
