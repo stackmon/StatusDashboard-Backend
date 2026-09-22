@@ -51,9 +51,8 @@ sequenceDiagram
 | `DenyReporterScopeMW` | – | – | `403` when the caller resolves to the `reporter` role |
 | `CheckEventExistenceMW` | – | – | `404` for an unknown `:eventID` before the handler runs |
 
-Two deliberate exceptions: `POST /v2/events` omits `DenyReporterScopeMW` because reporting system
-incidents is the one write a reporter may perform, and `POST /v1/component_status` predates RBAC — it
-rejects reporters, but a token whose role names map to no application role is still accepted there.
+One deliberate exception: `POST /v2/events` omits `DenyReporterScopeMW` because reporting system
+incidents is the one write a reporter may perform.
 
 ## Configuration
 
@@ -137,7 +136,7 @@ Requires operator or admin. A creator receives `403`.
 
 Machine principals holding only the `reporter` role are treated as anonymous for reads, and the
 extended view applies to `GET /v2/events`, `GET /v2/events/:eventID` and their deprecated
-`/v2/incidents` aliases. The v1 read endpoints and the RSS feeds always use the public view.
+`/v2/incidents` aliases. The RSS feeds always use the public view.
 `incident` and `info` events are never hidden, whatever their status.
 
 ## Error reference

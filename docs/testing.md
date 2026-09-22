@@ -19,7 +19,6 @@ run locally or in a Docker-capable environment.
 | `internal/api` | 2 | middleware chain, embedded Swagger UI |
 | `internal/api/auth` | 1 | OIDC token validation |
 | `internal/api/rbac` | 1 | role resolution and configuration |
-| `internal/api/v1` | 2 | legacy handlers, visibility |
 | `internal/api/v2` | 6 | auth, RBAC, validation, visibility and helpers |
 | `internal/checker` | 1 | maintenance status calculation (info transitions are untested) |
 | `internal/conf` | 1 | configuration parsing, defaults and validation |
@@ -47,7 +46,6 @@ external Zitadel.
 | `rbac_admin_only_test.go` | endpoints restricted to admins |
 | `rbac_reporter_test.go` | reporter scope restrictions |
 | `rbac_extract_test.go` | component extraction |
-| `v1_test.go` | legacy `/v1` endpoints |
 | `v2_test.go` | `/v2/incidents` alias, components, patch, extract, availability |
 | `v2_events_test.go` | `/v2/events` |
 | `v2_system_incident_test.go` | system incident creation and component movement |

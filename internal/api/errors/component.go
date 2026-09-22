@@ -14,6 +14,5 @@ func NewErrComponentDSNotExist(componentID int) error {
 var ErrComponentExist = errors.New("component already exists")
 var ErrComponentInvalidFormat = errors.New("component invalid format")
 var ErrComponentAttrInvalidFormat = errors.New("component attribute has invalid format")
-var ErrComponentRegionAttrMissing = errors.New("component attribute region is missing or invalid")
 var ErrComponentTypeAttrMissing = errors.New("component attribute type is missing or invalid")
 var ErrComponentCategoryAttrMissing = errors.New("component attribute category is missing or invalid")

@@ -12,14 +12,13 @@ Everything the dashboard publishes is an **event**. `GET /v2/events` and `GET /v
 The HTTP contract (paths, parameters, schemas, response codes) is defined in
 [`openapi.yaml`](../openapi.yaml), served as `/openapi.json` and rendered by the Swagger UI at
 `/swagger/index.html`. This document describes the behaviour a schema cannot express: validation,
-status lifecycles, automatic transitions, visibility and legacy quirks.
+status lifecycles, automatic transitions, visibility and deprecated aliases.
 
 ## Time formats
 
 | API | Layout | Notes |
 | --- | --- | --- |
 | `/v2/*` | RFC 3339, e.g. `2024-10-02T08:25:00Z` | converted to UTC before storage |
-| `/v1/*` | `2006-01-02 15:04`, e.g. `2024-10-02 08:25` | no timezone, parsed as UTC |
 
 ## Components
 
@@ -80,9 +79,6 @@ maintenance. Component movement is per component and depends on `system`.
    old incident is closed when the component was its only one.
 3. Only `incident` events with an impact greater than zero move components. A component that is
    covered by an open `maintenance` or `info` event is left where it is.
-
-See [v1-component-status.png](diagrams/v1-component-status.png) for the same flow expressed as a
-decision graph (the `/v1/component_status` entry point).
 
 #### System incidents (`system: true`)
 
@@ -223,31 +219,3 @@ Options are `mt` (region: `EU-DE`, `EU-NL`, `EU-CH2`, `Global`) and `srv` (compo
 `mt`). At most 10 incidents are published, using the public visibility rules. Unknown regions or a
 `srv` without `mt` return `404`. `/v2/rss/` serves the same feed and exists for tests only.
 
-## Legacy API (v1)
-
-Kept for compatibility with the old frontend; `POST /v1/component_status` uses the legacy
-`YYYY-MM-DD HH:MM` time format and the same public visibility rules.
-
-| Endpoint | Behaviour |
-| --- | --- |
-| `GET /v1/component_status` | components with their public incidents |
-| `GET /v1/incidents` | all public incidents, no filters |
-| `POST /v1/component_status` | machine reported component status, see below |
-
-### `POST /v1/component_status`
-
-Requires `name`, `impact` (`1`–`3`), `attributes` (must contain `region`); `text` is optional and
-defaults to `Incident`. The handler resolves the component by name and attributes, then:
-
-1. unknown component — `400`;
-2. the component belongs to an active event with impact `0` (maintenance or info) — `201` with that
-   event;
-3. no active event at all — a new incident is created and `201` returned;
-4. the component is not part of any open incident — it is added to an incident with the requested
-   impact if one exists, otherwise a new incident is created (`201`);
-5. the component is part of an open event with a higher or equal impact — `409`;
-6. the component is part of an open incident with a lower impact — the incident handling described
-   for [regular events](#regular-events-system-absent-or-false) runs and `201` is returned.
-
-The `409` body is
-`{message, targetComponent, existingIncidentId, existingIncidentTitle, details}`.

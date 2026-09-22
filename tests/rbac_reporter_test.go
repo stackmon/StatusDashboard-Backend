@@ -97,18 +97,13 @@ func TestReporter_CannotMutateEvents(t *testing.T) {
 	})
 }
 
-// TestReporter_CannotWriteComponents covers the legacy component routes, which
-// carry no RBAC middleware and rely on the reporter scope check alone.
+// TestReporter_CannotWriteComponents covers the component write route, which
+// carries no RBAC middleware and relies on the reporter scope check alone.
 func TestReporter_CannotWriteComponents(t *testing.T) {
-	r, _ := initTests(t)
+	r := initTests(t)
 
 	t.Run("POST /v2/components is forbidden", func(t *testing.T) {
 		w := postJSON(t, r, "/v2/components", []byte(`{}`), reporterToken)
-		assert.Equal(t, http.StatusForbidden, w.Code, "body: %s", w.Body.String())
-	})
-
-	t.Run("POST /v1/component_status is forbidden", func(t *testing.T) {
-		w := postJSON(t, r, "/v1/component_status", []byte(`{}`), reporterToken)
 		assert.Equal(t, http.StatusForbidden, w.Code, "body: %s", w.Body.String())
 	})
 }
