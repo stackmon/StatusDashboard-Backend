@@ -18,19 +18,19 @@ jobs:
     name: check golangci-lint version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check golangci-lint version
         run: make lint-check-version
   check:
     runs-on: ubuntu-latest
     needs: check_linter_version
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v9
         with:
           version: ${{ env.GO_LINT }}
 
@@ -38,7 +38,7 @@ jobs:
     name: go-test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
