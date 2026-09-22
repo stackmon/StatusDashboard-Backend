@@ -60,12 +60,16 @@ type RBACConfig struct {
 	Operators string `envconfig:"ROLES_OPERATORS"`
 	// Admins role name (mandatory)
 	Admins string `envconfig:"ROLES_ADMINS"`
+	// Reporters role name. Machine principals mapped here may only create
+	// system incidents via POST /v2/events.
+	Reporters string `envconfig:"ROLES_REPORTERS"`
 
 	// Deprecated: pre-Zitadel group names, read for one release to keep
 	// existing deployments running. Use the ROLES_* variables above.
 	GroupsCreators  string `envconfig:"GROUPS_CREATORS"`
 	GroupsOperators string `envconfig:"GROUPS_OPERATORS"`
 	GroupsAdmins    string `envconfig:"GROUPS_ADMINS"`
+	GroupsReporters string `envconfig:"GROUPS_REPORTERS"`
 }
 
 // OIDC configures the external identity provider. ClientID is the audience the
@@ -143,10 +147,14 @@ func (r *RBACConfig) applyLegacyRoleNames() {
 	if r.Admins == "" {
 		r.Admins = r.GroupsAdmins
 	}
+
+	if r.Reporters == "" {
+		r.Reporters = r.GroupsReporters
+	}
 }
 
 func (r *RBACConfig) legacyRoleNamesUsed() bool {
-	return r.GroupsCreators != "" || r.GroupsOperators != "" || r.GroupsAdmins != ""
+	return r.GroupsCreators != "" || r.GroupsOperators != "" || r.GroupsAdmins != "" || r.GroupsReporters != ""
 }
 
 func (c *Config) FillDefaults() {

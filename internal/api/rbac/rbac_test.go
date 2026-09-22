@@ -44,6 +44,11 @@ func TestService_Resolve(t *testing.T) {
 			expected: Admin,
 		},
 		{
+			name:     "Reporter role is not recognized when unconfigured",
+			roles:    []string{"sd_reporters"},
+			expected: NoRole,
+		},
+		{
 			name:     "Multiple roles: Operator supersedes Creator",
 			roles:    []string{"sd_creators", "sd_operators"},
 			expected: Operator,
@@ -81,6 +86,48 @@ func TestService_Resolve(t *testing.T) {
 			assert.Equal(t, tt.expected, got)
 		})
 	}
+}
+
+func TestService_Resolve_WithReporters(t *testing.T) {
+	svc := New(Config{
+		Creators:  "sd_creators",
+		Operators: "sd_operators",
+		Admins:    "sd_admins",
+		Reporters: "sd_reporters",
+	})
+
+	t.Run("reporter role resolves to Reporter", func(t *testing.T) {
+		assert.Equal(t, Reporter, svc.ResolveRole([]string{"sd_reporters"}))
+	})
+
+	t.Run("slash-prefixed reporter role resolves to Reporter", func(t *testing.T) {
+		assert.Equal(t, Reporter, svc.ResolveRole([]string{"/sd_reporters"}))
+	})
+
+	t.Run("creator supersedes reporter", func(t *testing.T) {
+		assert.Equal(t, Creator, svc.ResolveRole([]string{"sd_reporters", "sd_creators"}))
+	})
+
+	t.Run("admin supersedes reporter", func(t *testing.T) {
+		assert.Equal(t, Admin, svc.ResolveRole([]string{"sd_reporters", "sd_admins"}))
+	})
+
+	t.Run("reporter is an authorized role", func(t *testing.T) {
+		assert.True(t, svc.HasAuthorizedRole([]string{"sd_reporters"}))
+	})
+
+	t.Run("reporter holds no write permissions", func(t *testing.T) {
+		assert.False(t, Reporter.CanCreate())
+		assert.False(t, Reporter.CanApprove())
+		assert.False(t, Reporter.IsAdmin())
+	})
+
+	t.Run("reporter stays on the public view", func(t *testing.T) {
+		assert.True(t, Reporter.IsReporter())
+		assert.False(t, Reporter.CanViewInternalFields())
+		assert.True(t, Creator.CanViewInternalFields())
+		assert.False(t, NoRole.CanViewInternalFields())
+	})
 }
 
 func TestRole_Permissions(t *testing.T) {
@@ -287,6 +334,11 @@ func TestService_RoleNames(t *testing.T) {
 			name:     "deduplicates names shared by several roles",
 			svc:      New(testConfig("shared", "shared", "shared")),
 			expected: []string{"shared"},
+		},
+		{
+			name:     "includes reporter role names",
+			svc:      New(Config{Reporters: "sd_reporters"}),
+			expected: []string{"sd_reporters"},
 		},
 		{
 			name:     "no configured roles yields an empty list",

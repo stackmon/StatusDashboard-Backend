@@ -42,12 +42,12 @@ golangci-lint run ./tests/
 | RBAC — Version Conflict | 1 | 5 | 7 | 12 |
 | RBAC — Token Validation | 1 | 3 | 2 | 5 |
 | RBAC — Admin-Only Config | 1 | 4 | 10 | 14 |
-| Auth (OAuth flow) | 1 | 1 | 0 | 1 |
+| RBAC — Reporter Scope | 1 | 5 | 7 | 12 |
 | V1 API | 1 | 5 | 0 | 5 |
 | V2 Events API | 1 | 10 | 17 | 27 |
 | V2 Incidents API (deprecated) | 1 | 13 | 22 | 35 |
 | V2 System Incidents | 1 | 11 | 2 | 13 |
-| **Total** | **13** | **71** | **116** | **187** |
+| **Total** | **13** | **75** | **123** | **198** |
 
 ---
 
@@ -282,6 +282,49 @@ Tests verify correct behavior when only `SD_RBAC_ROLES_ADMINS` is configured
 
 ---
 
+### 8. Reporter Scope (`rbac_reporter_test.go`)
+
+Tests verify the machine-reporting role: a reporter may only create system
+incidents through `POST /v2/events` and always reads the public view. The role
+is documented in [RBAC & Permissions](../auth/rbac.md).
+
+#### System Incident Creation — `TestReporter_CanCreateSystemIncident`
+
+| # | Test | Scenario | Expected | Notes |
+|---|------|----------|----------|-------|
+| 1 | `CanCreateSystemIncident` | Reporter posts `"system": true` incident | 200, event stays system | Only allowed write |
+
+#### Rejected Writes — `TestReporter_CannotCreateHumanEvents`
+
+| # | Subtest | Scenario | Expected | Notes |
+|---|---------|----------|----------|-------|
+| 1 | `non-system incident` | Reporter posts a human incident | 403 | Human incidents need creator |
+| 2 | `info event` | Reporter posts an info event | 403 | Human events need creator |
+| 3 | `maintenance` | Reporter posts a maintenance event | 403 | Human events need creator |
+
+#### Rejected Mutation — `TestReporter_CannotMutateEvents`
+
+| # | Subtest | Scenario | Expected | Notes |
+|---|---------|----------|----------|-------|
+| 1 | `PATCH is forbidden` | Reporter patches an existing event | 403 | Reporter scope middleware |
+| 2 | `extract is forbidden` | Reporter calls the extract endpoint | 403 | Reporter scope middleware |
+
+#### Rejected Component Writes — `TestReporter_CannotWriteComponents`
+
+| # | Subtest | Scenario | Expected | Notes |
+|---|---------|----------|----------|-------|
+| 1 | `POST /v2/components is forbidden` | Reporter creates a component | 403 | Reporter scope middleware |
+| 2 | `POST /v1/component_status is forbidden` | Reporter reports component status | 403 | Reporter scope middleware |
+
+#### Public View — `TestReporter_PublicView`
+
+| # | Subtest | Scenario | Expected | Notes |
+|---|---------|----------|----------|-------|
+| 1 | `GET by ID hides contact_email and creator` | Reporter reads an event by ID | Both fields empty | Internal fields are contributor-only |
+| 2 | `GET list hides contact_email and creator` | Reporter lists events | Both fields empty | Internal fields are contributor-only |
+
+---
+
 ## API Endpoint Test Coverage
 
 ### V1 API (`v1_test.go`)
@@ -411,10 +454,10 @@ or future test additions):
 
 | File | Category | Tests |
 |------|----------|-------|
-| `auth_test.go` | OAuth | `TestAuth` |
 | `rbac_admin_only_test.go` | RBAC | `TestAdminOnly_AdminCRUD`, `TestAdminOnly_CreatorRejected`, `TestAdminOnly_OperatorRejected`, `TestAdminOnly_UnauthenticatedGET` |
 | `rbac_creation_test.go` | RBAC | `TestCreation_RoleInitialStatus`, `TestCreation_IncidentByRoles`, `TestCreation_MaintenanceValidation` |
 | `rbac_permissions_test.go` | RBAC | `TestPermissions_OperatorPatchMatrix`, `TestPermissions_AdminPatchMatrix`, `TestPermissions_CreatorPatchRestrictions`, `TestPermissions_NoRoleRejected`, `TestPermissions_UnauthenticatedRejected` |
+| `rbac_reporter_test.go` | RBAC | `TestReporter_CanCreateSystemIncident`, `TestReporter_CannotCreateHumanEvents`, `TestReporter_CannotMutateEvents`, `TestReporter_CannotWriteComponents`, `TestReporter_PublicView` |
 | `rbac_token_test.go` | RBAC | `TestToken_InvalidSignature`, `TestToken_InvalidGroupsClaim`, `TestToken_ValidClaimsSucceeds` |
 | `rbac_version_test.go` | RBAC | `TestVersion_NilVersionOnMaintenancePatch`, `TestVersion_WrongVersionOnMaintenancePatch`, `TestVersion_NilVersionOnIncidentPatch`, `TestVersion_WrongVersionOnIncidentPatch`, `TestVersion_ConcurrentMaintenancePatch` |
 | `rbac_visibility_test.go` | RBAC | `TestVisibility_PendingReviewHiddenFromUnauth`, `TestVisibility_PendingReviewVisibleToAuth`, `TestVisibility_ContactEmailAndCreator`, `TestVisibility_AuthVsUnauthEventList` |
@@ -440,7 +483,7 @@ go test ./internal/... -count=1
 
 | Package | Coverage | Key Test Files |
 |---------|----------|---------------|
-| `internal/conf` | 74.9% | `conf_test.go` — Validate, MinSecretKeyLength, PortValidation, FillDefaults, legacy role names, maskSecret, sanitizeDBString, mergeConfigs, Log |
-| `internal/api` | 49.6% | `middleware_test.go` — OIDC and HMAC verification, AuthenticationMW, SetJWTClaims, RBAC authorization |
-| `internal/api/rbac` | 100% | `rbac_test.go` — HasAuthorizedRole, role resolution, role names |
+| `internal/conf` | 75.1% | `conf_test.go` — Validate, MinSecretKeyLength, PortValidation, FillDefaults, legacy role names, maskSecret, sanitizeDBString, mergeConfigs, Log |
+| `internal/api` | 51.3% | `middleware_test.go` — OIDC and HMAC verification, AuthenticationMW, SetJWTClaims, RBAC authorization, reporter scope |
+| `internal/api/rbac` | 100% | `rbac_test.go` — HasAuthorizedRole, role resolution (including reporter), role names |
 | `internal/api/auth` | 92.4% | `auth_test.go` — HMAC and OIDC verification dispatch, signing method selection; `oidc_test.go` — discovery, JWKS caching, roles claim extraction, token validation |

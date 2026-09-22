@@ -8,12 +8,16 @@ covering creation rules, PATCH status transitions, and automatic checker transit
 ## Role Hierarchy
 
 ```
-Admin (50) > Operator (30) > Creator (10) > NoRole (0)
+Admin (50) > Operator (30) > Creator (10) > Reporter (5) > NoRole (0)
 ```
 
-Role names (`admin`, `operator`, `creator`) are abstract application roles resolved from role names
-configured via `SD_RBAC_ROLES_ADMINS`, `SD_RBAC_ROLES_OPERATORS`, and `SD_RBAC_ROLES_CREATORS`
-environment variables. See [rbac.md](rbac.md) for configuration details.
+Role names (`admin`, `operator`, `creator`, `reporter`) are abstract application roles resolved from role names
+configured via `SD_RBAC_ROLES_ADMINS`, `SD_RBAC_ROLES_OPERATORS`, `SD_RBAC_ROLES_CREATORS` and
+`SD_RBAC_ROLES_REPORTERS` environment variables. See [rbac.md](rbac.md) for configuration details.
+
+`reporter` sits below `creator` and is not a step in the privilege ladder: it is a machine-only scope
+that may only create system incidents (`POST /v2/events` with `"system": true`). Every other write
+request is rejected with `403 Forbidden`, and reads use the public view.
 
 ---
 

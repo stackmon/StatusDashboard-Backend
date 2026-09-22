@@ -31,18 +31,20 @@ const (
 	creatorRole  = "sd_creators"
 	operatorRole = "sd_operators"
 	adminRole    = "sd_admins"
+	reporterRole = "sd_reporters"
 	// unmappedRole is a valid project role in Zitadel that the backend does not
 	// map to any RBAC tier.
 	unmappedRole = "sd_readers"
 )
 
 // testRBACService builds the RBAC service with the same role mapping as the
-// production configuration.
+// production configuration, including the reporter tier.
 func testRBACService() *rbac.Service {
 	return rbac.New(rbac.Config{
 		Creators:  creatorRole,
 		Operators: operatorRole,
 		Admins:    adminRole,
+		Reporters: reporterRole,
 	})
 }
 
@@ -80,16 +82,19 @@ func initTestsWithHMAC(t *testing.T) *gin.Engine {
 	v2Api.PATCH("events/:eventID",
 		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(d, logger),
 		v2.PatchIncidentHandler(d, logger))
 	v2Api.POST("events/:eventID/extract",
 		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(d, logger),
 		api.ValidateComponentsMW(d, logger),
 		v2.PostIncidentExtractHandler(d, logger))
 	v2Api.POST("components",
 		api.AuthenticationMW(authn, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		v2.PostComponentHandler(d, logger))
 
 	return r
@@ -119,6 +124,7 @@ var (
 	operatorToken = tokenForRole("operator-user", operatorRole)
 	creatorTokenA = tokenForRole("user-a", creatorRole)
 	creatorTokenB = tokenForRole("user-b", creatorRole)
+	reporterToken = tokenForRole("reporter-user", reporterRole)
 	noRoleToken   = tokenForRole("norole-user", unmappedRole)
 )
 

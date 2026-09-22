@@ -547,6 +547,7 @@ func TestPrepareIncidentCreateNonMaintenance(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
+	c.Set(RoleContextKey, rbac.Creator)
 	logger := zap.NewNop()
 
 	impact := 1
@@ -562,9 +563,118 @@ func TestPrepareIncidentCreateNonMaintenance(t *testing.T) {
 
 	result := prepareIncidentCreate(c, logger, incData)
 
-	assert.True(t, result, "non-maintenance should pass without RBAC check")
+	assert.True(t, result, "non-maintenance should pass without status resolution")
 	assert.Empty(t, incData.Status, "status should not be set for non-maintenance")
 }
+
+func TestPrepareIncidentCreateReporterScope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	logger := zap.NewNop()
+
+	impact := 1
+	startDate := time.Now().Add(-time.Hour).UTC()
+
+	tests := []struct {
+		name         string
+		typ          string
+		impact       int
+		system       *bool
+		expectAllow  bool
+		expectStatus int
+	}{
+		{
+			name:         "reporter creates system incident",
+			typ:          event.TypeIncident,
+			impact:       1,
+			system:       boolPtr(true),
+			expectAllow:  true,
+			expectStatus: 200,
+		},
+		{
+			name:         "reporter creates non-system incident",
+			typ:          event.TypeIncident,
+			impact:       1,
+			system:       boolPtr(false),
+			expectAllow:  false,
+			expectStatus: 403,
+		},
+		{
+			name:         "reporter creates incident without the system flag",
+			typ:          event.TypeIncident,
+			impact:       1,
+			expectAllow:  false,
+			expectStatus: 403,
+		},
+		{
+			name:         "reporter creates info event",
+			typ:          event.TypeInformation,
+			impact:       0,
+			system:       boolPtr(false),
+			expectAllow:  false,
+			expectStatus: 403,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Set(RoleContextKey, rbac.Reporter)
+
+			impactVal := tc.impact
+			incData := &IncidentData{
+				Title:      "Reporter event",
+				Impact:     &impactVal,
+				Components: []int{1},
+				StartDate:  startDate,
+				Type:       tc.typ,
+				System:     tc.system,
+			}
+
+			result := prepareIncidentCreate(c, logger, incData)
+
+			assert.Equal(t, tc.expectAllow, result)
+			assert.Equal(t, tc.expectStatus, w.Code)
+		})
+	}
+
+	t.Run("creator keeps access to non-system incidents", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Set(RoleContextKey, rbac.Creator)
+
+		incData := &IncidentData{
+			Title:      "Creator incident",
+			Impact:     &impact,
+			Components: []int{1},
+			StartDate:  startDate,
+			Type:       event.TypeIncident,
+			System:     boolPtr(false),
+		}
+
+		assert.True(t, prepareIncidentCreate(c, logger, incData))
+		assert.Equal(t, 200, w.Code)
+	})
+
+	t.Run("missing role in context is forbidden", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+
+		incData := &IncidentData{
+			Title:      "Anonymous incident",
+			Impact:     &impact,
+			Components: []int{1},
+			StartDate:  startDate,
+			Type:       event.TypeIncident,
+			System:     boolPtr(true),
+		}
+
+		assert.False(t, prepareIncidentCreate(c, logger, incData))
+		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+}
+
+func boolPtr(v bool) *bool { return &v }
 
 func TestPrepareIncidentPatchNonMaintenance(t *testing.T) {
 	gin.SetMode(gin.TestMode)
