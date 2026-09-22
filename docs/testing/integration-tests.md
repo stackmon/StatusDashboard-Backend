@@ -247,7 +247,7 @@ Tests verify that each role can only perform the actions allowed by the
 
 ### 7. Admin-Only Configuration (`rbac_admin_only_test.go`)
 
-Tests verify correct behavior when only `SD_RBAC_GROUPS_ADMINS` is configured
+Tests verify correct behavior when only `SD_RBAC_ROLES_ADMINS` is configured
 (creator and operator role names are empty strings).
 
 #### Admin CRUD — `TestAdminOnly_AdminCRUD`
@@ -354,7 +354,7 @@ test(s) that verify it.
 | Requirement | Description | Covered By |
 |-------------|-------------|------------|
 | FR-002 | Extract roles from the JWT token | `TestToken_InvalidGroupsClaim` |
-| FR-002a | Map role names via SD_RBAC_GROUPS_* env vars | `TestToken_ValidClaimsSucceeds` |
+| FR-002a | Map role names via SD_RBAC_ROLES_* env vars | `TestToken_ValidClaimsSucceeds` |
 | FR-004 | Creator can create maintenance events | `TestCreation_RoleInitialStatus` |
 | FR-005 | Creator → pending_review initial status | `TestCreation_RoleInitialStatus/creator_creates_maintenance_with_pending_review_status` |
 | FR-005a | Operator → planned initial status | `TestCreation_RoleInitialStatus/operator_creates_maintenance_with_planned_status` |
@@ -440,7 +440,7 @@ go test ./internal/... -count=1
 
 | Package | Coverage | Key Test Files |
 |---------|----------|---------------|
-| `internal/conf` | 72.9% | `conf_test.go` — Validate, MinSecretKeyLength, PortValidation, FillDefaults, maskSecret, sanitizeDBString, mergeConfigs, Log |
+| `internal/conf` | 74.9% | `conf_test.go` — Validate, MinSecretKeyLength, PortValidation, FillDefaults, legacy role names, maskSecret, sanitizeDBString, mergeConfigs, Log |
 | `internal/api` | 49.6% | `middleware_test.go` — OIDC and HMAC verification, AuthenticationMW, SetJWTClaims, RBAC authorization |
 | `internal/api/rbac` | 100% | `rbac_test.go` — HasAuthorizedRole, role resolution, role names |
 | `internal/api/auth` | 92.4% | `auth_test.go` — HMAC and OIDC verification dispatch, signing method selection; `oidc_test.go` — discovery, JWKS caching, roles claim extraction, token validation |

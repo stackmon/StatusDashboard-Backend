@@ -126,9 +126,9 @@ func initTests(t *testing.T) (*gin.Engine, *db.DB) {
 
 	// Provide RBAC role names and the local HMAC secret so conf.Validate() passes.
 	t.Setenv("SD_SECRET_KEY", testHMACSecret)
-	t.Setenv("SD_RBAC_GROUPS_CREATORS", creatorRole)
-	t.Setenv("SD_RBAC_GROUPS_OPERATORS", operatorRole)
-	t.Setenv("SD_RBAC_GROUPS_ADMINS", adminRole)
+	t.Setenv("SD_RBAC_ROLES_CREATORS", creatorRole)
+	t.Setenv("SD_RBAC_ROLES_OPERATORS", operatorRole)
+	t.Setenv("SD_RBAC_ROLES_ADMINS", adminRole)
 
 	cfg, err := conf.LoadConf()
 	require.NoError(t, err)

@@ -303,7 +303,7 @@ func TestService_RoleNames(t *testing.T) {
 }
 
 // TestService_CommaSeparatedConfig reproduces the deployment scenario
-// SD_RBAC_GROUPS_ADMINS="sd-admins,sd_readers" where a single variable may hold
+// SD_RBAC_ROLES_ADMINS="sd-admins,sd_readers" where a single variable may hold
 // several project role keys.
 func TestService_CommaSeparatedConfig(t *testing.T) {
 	svc := New(testConfig("sd_creators", "sd_operators", "sd-admins,sd_readers"))

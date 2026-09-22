@@ -42,7 +42,7 @@ Every request that carries a bearer token is validated:
    `iss`, `aud` and `exp` claims are checked.
 3. **Subject** — a token without a `sub` claim is rejected; the subject is the user identity.
 4. **Roles** — role names are read from the claim named by `SD_OIDC_ROLES_CLAIM`, keeping only
-   the names the resource server knows (`SD_RBAC_GROUPS_*`). See [rbac.md](rbac.md).
+   the names the resource server knows (`SD_RBAC_ROLES_*`). See [rbac.md](rbac.md).
 5. **Audit logging** — every outcome is logged with `idp_type`, `username`, `result` and `reason`.
 
 ### Middleware variants

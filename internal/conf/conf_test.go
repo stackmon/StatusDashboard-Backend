@@ -35,7 +35,7 @@ func TestRBACConfig_Validate(t *testing.T) {
 			name:      "Missing Admins fails validation",
 			config:    RBACConfig{},
 			expectErr: true,
-			errSubstr: "SD_RBAC_GROUPS_ADMINS",
+			errSubstr: "SD_RBAC_ROLES_ADMINS",
 		},
 		{
 			name: "Missing Admins but other roles set fails",
@@ -44,7 +44,7 @@ func TestRBACConfig_Validate(t *testing.T) {
 				Operators: "sd_operators",
 			},
 			expectErr: true,
-			errSubstr: "SD_RBAC_GROUPS_ADMINS",
+			errSubstr: "SD_RBAC_ROLES_ADMINS",
 		},
 	}
 
@@ -70,7 +70,7 @@ func TestConfig_Validate_PropagatesRBACError(t *testing.T) {
 
 	err := cfg.Validate()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "SD_RBAC_GROUPS_ADMINS")
+	assert.Contains(t, err.Error(), "SD_RBAC_ROLES_ADMINS")
 }
 
 func TestConfig_Validate_RequiresProvider(t *testing.T) {
@@ -282,6 +282,32 @@ func TestFillDefaults(t *testing.T) {
 
 		assert.Equal(t, "roles", c.OIDC.RolesClaim)
 	})
+
+	t.Run("legacy group variables fill the role names", func(t *testing.T) {
+		c := &Config{RBAC: RBACConfig{
+			GroupsCreators:  "legacy_creators",
+			GroupsOperators: "legacy_operators",
+			GroupsAdmins:    "legacy_admins",
+		}}
+		c.FillDefaults()
+
+		assert.Equal(t, "legacy_creators", c.RBAC.Creators)
+		assert.Equal(t, "legacy_operators", c.RBAC.Operators)
+		assert.Equal(t, "legacy_admins", c.RBAC.Admins)
+		assert.True(t, c.RBAC.legacyRoleNamesUsed())
+	})
+
+	t.Run("role names win over legacy group variables", func(t *testing.T) {
+		c := &Config{RBAC: RBACConfig{
+			Creators:       "sd_creators",
+			GroupsCreators: "legacy_creators",
+			GroupsAdmins:   "legacy_admins",
+		}}
+		c.FillDefaults()
+
+		assert.Equal(t, "sd_creators", c.RBAC.Creators)
+		assert.Equal(t, "legacy_admins", c.RBAC.Admins)
+	})
 }
 
 func TestMaskSecret(t *testing.T) {
@@ -364,11 +390,13 @@ func TestMergeConfigs(t *testing.T) {
 	t.Run("merges into embedded struct (RBACConfig)", func(t *testing.T) {
 		c := &Config{OIDC: &OIDC{}}
 		env := map[string]string{
-			"SD_RBAC_GROUPS_ADMINS": "my-admins",
+			"SD_RBAC_ROLES_ADMINS":    "my-admins",
+			"SD_RBAC_GROUPS_CREATORS": "legacy-creators",
 		}
 		err := mergeConfigs(env, c, "SD")
 		require.NoError(t, err)
 		assert.Equal(t, "my-admins", c.RBAC.Admins)
+		assert.Equal(t, "legacy-creators", c.RBAC.GroupsCreators)
 	})
 
 	t.Run("merges into pointer struct (OIDC)", func(t *testing.T) {
@@ -412,6 +440,15 @@ func TestConfig_Log(t *testing.T) {
 				RolesClaim:    DefaultRolesClaim,
 				UsernameClaim: "preferred_username",
 			},
+		}
+		assert.NotPanics(t, func() { c.Log(logger) })
+	})
+
+	t.Run("logs the deprecated group variables", func(t *testing.T) {
+		c := &Config{
+			Port:     "8000",
+			LogLevel: "devel",
+			RBAC:     RBACConfig{GroupsAdmins: "legacy-admins"},
 		}
 		assert.NotPanics(t, func() { c.Log(logger) })
 	})

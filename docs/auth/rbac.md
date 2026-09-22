@@ -10,7 +10,7 @@ role names carried by the JWT roles claim of the access token and mapped to appl
 Three application roles are supported, with highest privilege taking precedence when a user has multiple roles.
 Role names in this document refer to abstract application roles. Each role is mapped from a role name
 of the identity provider project, configured via the corresponding environment variable
-(e.g. `SD_RBAC_GROUPS_ADMINS` → `admin` role).
+(e.g. `SD_RBAC_ROLES_ADMINS` → `admin` role).
 
 | Role | Priority | Description |
 |------|----------|-------------|
@@ -20,8 +20,8 @@ of the identity provider project, configured via the corresponding environment v
 
 ## Configuration
 
-RBAC is always active — there is no disable toggle. `SD_RBAC_GROUPS_ADMINS` is mandatory;
-`SD_RBAC_GROUPS_OPERATORS` and `SD_RBAC_GROUPS_CREATORS` are optional (when omitted, no user
+RBAC is always active — there is no disable toggle. `SD_RBAC_ROLES_ADMINS` is mandatory;
+`SD_RBAC_ROLES_OPERATORS` and `SD_RBAC_ROLES_CREATORS` are optional (when omitted, no user
 can match the corresponding role).
 
 Each variable accepts either a single role name or a **comma-separated list** of role names.
@@ -29,13 +29,16 @@ All listed role names are mapped to the same role, matched case-sensitively.
 
 | Environment Variable | Required | Description |
 |---------------------|----------|-------------|
-| `SD_RBAC_GROUPS_ADMINS` | **Yes** | Role name(s) that map to the `admin` role |
-| `SD_RBAC_GROUPS_OPERATORS` | No | Role name(s) that map to the `operator` role |
-| `SD_RBAC_GROUPS_CREATORS` | No | Role name(s) that map to the `creator` role |
+| `SD_RBAC_ROLES_ADMINS` | **Yes** | Role name(s) that map to the `admin` role |
+| `SD_RBAC_ROLES_OPERATORS` | No | Role name(s) that map to the `operator` role |
+| `SD_RBAC_ROLES_CREATORS` | No | Role name(s) that map to the `creator` role |
+
+The pre-Zitadel `SD_RBAC_GROUPS_*` variables are still read for one release; when both the old and
+the new name are set, the new one wins and a deprecation warning is logged.
 
 **Example** — mapping multiple Zitadel project roles to the `admin` role:
 ```
-SD_RBAC_GROUPS_ADMINS=sd_admins,status-dashboard
+SD_RBAC_ROLES_ADMINS=sd_admins,status-dashboard
 ```
 A token whose roles claim contains either `sd_admins` or `status-dashboard` is granted the
 `admin` role.
@@ -146,9 +149,9 @@ Zitadel access token claims used by the API:
 
 - `sub` → stored as the event `creator` (identity is the Zitadel user id, not an email address)
 - the claim named by `SD_OIDC_ROLES_CLAIM` (default `urn:zitadel:iam:org:project:roles`) → its role
-  names are matched against the configured `SD_RBAC_GROUPS_*` variables to resolve the application
+  names are matched against the configured `SD_RBAC_ROLES_*` variables to resolve the application
   role. Only names the resource server knows are considered, so unrelated custom role keys in the
-  same map are ignored. For example, with `SD_RBAC_GROUPS_ADMINS=sd_admins,status-dashboard`, a token
+  same map are ignored. For example, with `SD_RBAC_ROLES_ADMINS=sd_admins,status-dashboard`, a token
   holding either role key is granted the `admin` role.
 
 ## Authentication Providers
