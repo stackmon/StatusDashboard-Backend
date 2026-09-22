@@ -63,15 +63,22 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	// Only set up cleanup if container was created successfully
+	mappedPort, errPort := container.MappedPort(ctx, "5432/tcp")
+	if errPort != nil {
+		log.Printf("failed to resolve the mapped postgres port: %s", errPort)
+		if errTerm := testcontainers.TerminateContainer(container); errTerm != nil {
+			log.Printf("failed to terminate container: %s", errTerm)
+		}
+		os.Exit(1)
+	}
+	port := mappedPort.Port()
+
+	// Only set up cleanup once the container is reachable
 	defer func() {
 		if err = testcontainers.TerminateContainer(container); err != nil {
 			log.Printf("failed to terminate container: %s", err)
 		}
 	}()
-
-	ports, _ := container.Ports(ctx)
-	port := ports["5432/tcp"][0].HostPort
 	databaseURL = fmt.Sprintf(databaseURL, dbUser, dbPassword, port, dbName)
 
 	// Apply migrations (add sslmode=disable for test container)
