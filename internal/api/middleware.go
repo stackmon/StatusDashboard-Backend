@@ -55,8 +55,8 @@ func ValidateComponentsMW(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 	}
 }
 
-// authAudit emits a structured audit log event for authentication/authorization decisions.
-// All fields follow a consistent schema for SIEM integration.
+// authAudit emits the auth_audit event; the field set is part of the log schema
+// consumed by SIEM.
 func authAudit(logger *zap.Logger, action, result, idpType, username, reason string) {
 	fields := []zap.Field{
 		zap.String("event", "auth_audit"),
@@ -80,17 +80,10 @@ func authAudit(logger *zap.Logger, action, result, idpType, username, reason str
 	}
 }
 
-// authenticate verifies the bearer token and stores the caller identity in the
-// gin context. Failures are logged as audit events.
-func authenticate(authn *auth.Authenticator, rawToken string, c *gin.Context, logger *zap.Logger) error {
+func authenticate(authn *auth.Provider, rawToken string, c *gin.Context, logger *zap.Logger) error {
 	claims, err := authn.Verify(c.Request.Context(), rawToken)
 	if err != nil {
 		authAudit(logger, "token_validation", "failure", "", "", err.Error())
-		return apiErrors.ErrAuthTokenInvalid
-	}
-
-	if claims.Subject == "" {
-		authAudit(logger, "token_validation", "failure", claims.Provider, "", "missing_subject_claim")
 		return apiErrors.ErrAuthTokenInvalid
 	}
 
@@ -112,9 +105,8 @@ func authenticate(authn *auth.Authenticator, rawToken string, c *gin.Context, lo
 	return nil
 }
 
-// AuthenticationMW validates JWT tokens.
-// Missing or invalid tokens result in 401.
-func AuthenticationMW(authn *auth.Authenticator, logger *zap.Logger) gin.HandlerFunc {
+// AuthenticationMW rejects requests without a valid bearer token.
+func AuthenticationMW(authn *auth.Provider, logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
@@ -133,10 +125,9 @@ func AuthenticationMW(authn *auth.Authenticator, logger *zap.Logger) gin.Handler
 	}
 }
 
-// SetJWTClaims performs soft authentication for public-read endpoints.
-// If no Authorization header is present, the request proceeds anonymously.
-// If a token is present but invalid/forged, access is denied (401).
-func SetJWTClaims(authn *auth.Authenticator, logger *zap.Logger) gin.HandlerFunc {
+// SetJWTClaims performs soft authentication: requests without a token proceed
+// anonymously, a token that is present but invalid is rejected.
+func SetJWTClaims(authn *auth.Provider, logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
@@ -154,8 +145,7 @@ func SetJWTClaims(authn *auth.Authenticator, logger *zap.Logger) gin.HandlerFunc
 	}
 }
 
-// RBACAuthorizationMW resolves user roles from the token claims for write operations (POST/PATCH).
-// Users without a configured role are rejected with 403 Forbidden.
+// RBACAuthorizationMW rejects callers whose token roles grant no application role.
 func RBACAuthorizationMW(rbacService *rbac.Service, logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		rolesVal, exists := c.Get(v2.UserIDRolesContextKey)

@@ -14,12 +14,9 @@ const (
 	v2Group = "v2"
 )
 
-// InitRoutes registers all HTTP routes on the underlying gin engine.
-// openAPISpecPath is consumed once here to bind the /openapi.json handler;
-// it is not retained on the API struct because it has no per-request use.
-// Returns an error if the OpenAPI spec cannot be read or parsed — callers
-// should propagate this so a misconfigured deployment fails at boot rather
-// than serving 500s on first request.
+// InitRoutes registers all HTTP routes. A failure to read the OpenAPI spec is
+// returned so that a misconfigured deployment fails at boot instead of serving
+// 500s on the first request.
 func (a *API) InitRoutes(openAPISpecPath string) error {
 	a.initV1Routes()
 	a.initV2Routes()

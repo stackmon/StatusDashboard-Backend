@@ -11,6 +11,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/coreos/go-oidc/v3/oidc/oidctest"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -200,6 +201,22 @@ func TestProviderVerifyRejectsBadTokens(t *testing.T) {
 			assert.ErrorIs(t, err, ErrTokenInvalid)
 		})
 	}
+
+	t.Run("unsigned token with alg none", func(t *testing.T) {
+		t.Parallel()
+
+		unsigned, err := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{
+			"iss": idp.server.URL,
+			"aud": testClientID,
+			"sub": "user-1",
+			"exp": time.Now().Add(time.Hour).Unix(),
+		}).SignedString(jwt.UnsafeAllowNoneSignatureType)
+		require.NoError(t, err)
+
+		_, verifyErr := provider.Verify(context.Background(), unsigned)
+
+		assert.ErrorIs(t, verifyErr, ErrTokenInvalid)
+	})
 
 	t.Run("garbage token", func(t *testing.T) {
 		t.Parallel()

@@ -15,13 +15,10 @@ info:
     - **Roles**: the claim named by `SD_OIDC_ROLES_CLAIM` (default
       `urn:zitadel:iam:org:project:roles`)
 
-    A transitional local HMAC provider (HS256/HS384/HS512 against `SD_SECRET_KEY`,
-    ≥ 32 characters) is still accepted for development, tests and
-    service-to-service calls; it will be removed once the metrics processor
-    authenticates as a Zitadel service user. At least one provider must be
-    configured, and the JWT `alg` header determines which one validates a token.
-    Clients obtain tokens directly from the identity provider; this API never
-    mints, refreshes or stores them.
+    Machine clients such as the metrics processor authenticate with a Zitadel
+    service user and a private JWT. Only `RS256` tokens are accepted. Clients
+    obtain tokens directly from the identity provider; this API never mints,
+    refreshes or stores them.
 
     Some fields are only visible to authenticated users:
     - `creator` - User ID of the event creator
@@ -1131,6 +1128,5 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: |
-        JWT bearer token issued by the configured OIDC provider (Zitadel), or by
-        the transitional local HMAC provider.
+        JWT bearer token issued by the OIDC provider (Zitadel).
         Include in Authorization header as "Bearer <token>".

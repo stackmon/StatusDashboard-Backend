@@ -12,14 +12,9 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 )
 
-// Error values returned while authenticating a request.
-var (
-	// ErrTokenInvalid covers any token that cannot be trusted: bad signature,
-	// unexpected issuer or audience, expired, or missing mandatory claims.
-	ErrTokenInvalid = errors.New("token is invalid")
-	// ErrNoProviderConfigured is returned when no verifier can handle the token.
-	ErrNoProviderConfigured = errors.New("no authentication provider is configured for this token")
-)
+// ErrTokenInvalid covers any token that cannot be trusted: bad signature,
+// unexpected issuer or audience, expired, or missing mandatory claims.
+var ErrTokenInvalid = errors.New("token is invalid")
 
 // maxRolesClaimDepth limits the recursion into the roles claim. Zitadel nests
 // role names at most two levels deep.
@@ -27,25 +22,18 @@ const maxRolesClaimDepth = 3
 
 // ProviderConfig describes the identity provider that issues access tokens.
 type ProviderConfig struct {
-	// Issuer is the OIDC issuer URL, e.g. https://zitadel.example.com.
 	Issuer string
-	// ClientID is the audience the resource server accepts. Tokens issued to
-	// any other audience are rejected.
+	// ClientID is the audience every accepted token must be issued to.
 	ClientID string
-	// RolesClaim is the claim carrying the project roles. An empty value
-	// disables role extraction.
+	// RolesClaim is the claim carrying the project roles; empty disables role extraction.
 	RolesClaim string
-	// RoleNames are the role names the resource server knows about. Claims
-	// carrying any other name (organisation and project IDs, organisation
-	// names) are ignored.
+	// RoleNames are the role names the resource server knows, all other names in the claim are ignored.
 	RoleNames []string
-	// UsernameClaim is an optional claim carrying a human readable user name
-	// used for audit logging. It never replaces the subject as identity.
+	// UsernameClaim is an optional display name for audit logging, never the identity.
 	UsernameClaim string
 }
 
-// Provider verifies tokens issued by an OIDC identity provider (Zitadel) and
-// extracts the identity and project roles from them.
+// Provider verifies tokens issued by Zitadel and extracts identity and project roles.
 type Provider struct {
 	verifier      *oidc.IDTokenVerifier
 	rolesClaim    string
@@ -54,8 +42,8 @@ type Provider struct {
 }
 
 // NewProvider discovers the provider metadata and checks that it publishes a
-// usable JWKS. Failures are returned to the caller so a misconfigured
-// deployment refuses to start instead of rejecting every request at runtime.
+// usable JWKS, so that a misconfigured deployment refuses to start instead of
+// rejecting every request at runtime.
 func NewProvider(ctx context.Context, cfg ProviderConfig) (*Provider, error) {
 	oidcProvider, err := oidc.NewProvider(ctx, cfg.Issuer)
 	if err != nil {
@@ -99,17 +87,11 @@ func (p *Provider) Verify(ctx context.Context, rawToken string) (*Claims, error)
 	return &Claims{
 		Subject:  token.Subject,
 		Username: stringClaim(payload, p.usernameClaim),
-		Roles:    p.roles(payload[p.rolesClaim]),
+		Roles:    extractRoleNames(payload[p.rolesClaim], p.roleNames),
 		Provider: ProviderZitadel,
 	}, nil
 }
 
-// roles returns the known role names carried by the roles claim, sorted.
-func (p *Provider) roles(value any) []string {
-	return extractRoleNames(value, p.roleNames)
-}
-
-// jwksURI reads the JWKS location from the provider metadata.
 func jwksURI(provider *oidc.Provider, issuer string) (string, error) {
 	var metadata struct {
 		JWKSURI string `json:"jwks_uri"`
@@ -127,8 +109,8 @@ func jwksURI(provider *oidc.Provider, issuer string) (string, error) {
 }
 
 // checkKeySet prefetches the JWKS so that an unreachable or empty key set is
-// reported at startup. The verifier keeps caching keys by kid afterwards and
-// refetches them on rotation.
+// reported at startup. The verifier caches keys by kid afterwards and refetches
+// them on rotation.
 func checkKeySet(ctx context.Context, jwksURL string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
 	if err != nil {
@@ -159,8 +141,7 @@ func checkKeySet(ctx context.Context, jwksURL string) error {
 	return nil
 }
 
-// stringClaim returns the string value of the given claim, empty when the claim
-// is absent or of another type.
+// stringClaim returns the string value of a claim, empty when it is absent or not a string.
 func stringClaim(payload map[string]any, claim string) string {
 	if claim == "" {
 		return ""
@@ -171,10 +152,8 @@ func stringClaim(payload map[string]any, claim string) string {
 }
 
 // extractRoleNames collects the known role names from the roles claim. Zitadel
-// emits project roles either as {role: {orgID: orgName}} or as {orgID: {role:
-// orgName}}, so the claim is walked and every key or string value matching a
-// known role name is kept; organisation and project IDs, organisation names and
-// any other unknown value are ignored.
+// nests them as {role: {orgID: orgName}} or {orgID: {role: orgName}}, so keys and
+// string values are both matched against the known names.
 func extractRoleNames(value any, known map[string]struct{}) []string {
 	if value == nil || len(known) == 0 {
 		return []string{}
@@ -217,7 +196,6 @@ func collectRoleNames(value any, known, found map[string]struct{}, depth int) {
 	}
 }
 
-// roleNameSet builds the lookup set of known role names.
 func roleNameSet(names []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(names))
 	for _, name := range names {

@@ -81,6 +81,8 @@ func TestMain(m *testing.M) {
 		return
 	}
 
+	defer testIDP.server.Close()
+
 	m.Run()
 }
 
@@ -124,19 +126,7 @@ func initTests(t *testing.T) (*gin.Engine, *db.DB) {
 
 	logger, _ := zap.NewDevelopment()
 
-	// Provide RBAC role names and the local HMAC secret so conf.Validate() passes.
-	t.Setenv("SD_SECRET_KEY", testHMACSecret)
-	t.Setenv("SD_RBAC_ROLES_CREATORS", creatorRole)
-	t.Setenv("SD_RBAC_ROLES_OPERATORS", operatorRole)
-	t.Setenv("SD_RBAC_ROLES_ADMINS", adminRole)
-	t.Setenv("SD_RBAC_ROLES_REPORTERS", reporterRole)
-
-	cfg, err := conf.LoadConf()
-	require.NoError(t, err)
-
-	// SD_OIDC_ISSUER is not set here, so the tests exercise the transitional
-	// local HMAC branch, like a deployment without Zitadel configured.
-	authn := auth.NewAuthenticator(nil, cfg.SecretKeyV1)
+	authn := testIDP.provider(t, testRBACService().RoleNames()...)
 
 	initRoutesV1(t, r, d, authn, logger)
 	initRoutesV2(t, r, d, authn, logger)
@@ -144,7 +134,7 @@ func initTests(t *testing.T) (*gin.Engine, *db.DB) {
 	return r, d
 }
 
-func initRoutesV1(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Authenticator, logger *zap.Logger) {
+func initRoutesV1(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Provider, logger *zap.Logger) {
 	t.Helper()
 	t.Log("init routes for V1")
 
@@ -159,7 +149,7 @@ func initRoutesV1(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Authen
 	v1Api.GET("incidents", v1.GetIncidentsHandler(dbInst, logger))
 }
 
-func initRoutesV2(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Authenticator, logger *zap.Logger) {
+func initRoutesV2(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Provider, logger *zap.Logger) {
 	t.Helper()
 	t.Log("init routes for V2")
 

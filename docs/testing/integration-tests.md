@@ -25,8 +25,9 @@ golangci-lint run ./tests/
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `main_test.go` | 289 | `TestMain` (testcontainers bootstrap), `initTests`, route initialisation with production RBAC middleware, DB helpers (`truncateIncidents`, `restoreFixtureIncident`) |
-| `rbac_helpers_test.go` | 278 | HMAC JWT signing (`testHMACSecret`), `tokenForRole`, pre-built tokens (`adminToken`, `operatorToken`, `creatorToken`), role constants, HTTP request helpers, event factory functions |
+| `main_test.go` | 268 | `TestMain` (testcontainers bootstrap), `initTests`, route initialisation with production RBAC middleware, DB helpers (`truncateIncidents`, `restoreFixtureIncident`) |
+| `rbac_helpers_test.go` | 329 | `initRBACTests`, pre-built tokens (`adminToken`, `operatorToken`, `creatorToken`), role constants, HTTP request helpers, event factory functions |
+| `idp_test.go` | 109 | Local OIDC identity provider serving its JWKS, `tokenClaims`, `signToken`, `tokenForRole` |
 | `dump_test.sql` | — | Fixture data: 6 components (CCE, ECS, DCS × EU-DE/EU-NL), 1 resolved incident |
 
 ---
@@ -238,10 +239,10 @@ Tests verify that each role can only perform the actions allowed by the
 
 | # | Test / Subtest | Scenario | Expected | Spec Ref |
 |---|----------------|----------|----------|----------|
-| 1 | `POST returns 401` | Token signed with wrong HMAC key | 401 | FR-026 |
-| 2 | `PATCH returns 401` | Token signed with wrong HMAC key | 401 | FR-026 |
-| 3 | `InvalidGroupsClaim` | Token with a non-array groups claim (local HMAC branch) | 403 | FR-002 |
-| 4 | `ValidClaimsSucceeds` | Token with valid roles and username (local HMAC branch) | 201 | FR-002a |
+| 1 | `ForeignSignature/POST returns 401` | Token signed by a key the provider does not publish | 401 | FR-026 |
+| 2 | `ForeignSignature/PATCH returns 401` | Token signed by a key the provider does not publish | 401 | FR-026 |
+| 3 | `MalformedRolesClaim` | Role names in a claim of an unexpected type | 403 | FR-002 |
+| 4 | `ValidClaimsSucceeds` | Token with valid roles and username | 200 | FR-002a |
 
 ---
 
@@ -483,7 +484,7 @@ go test ./internal/... -count=1
 
 | Package | Coverage | Key Test Files |
 |---------|----------|---------------|
-| `internal/conf` | 75.1% | `conf_test.go` — Validate, MinSecretKeyLength, PortValidation, FillDefaults, legacy role names, maskSecret, sanitizeDBString, mergeConfigs, Log |
-| `internal/api` | 51.3% | `middleware_test.go` — OIDC and HMAC verification, AuthenticationMW, SetJWTClaims, RBAC authorization, reporter scope |
+| `internal/conf` | 70.7% | `conf_test.go` — Validate, PortValidation, FillDefaults, legacy role names, SanitizeDBString, mergeConfigs, Log |
+| `internal/api` | 49.2% | `middleware_test.go` — OIDC verification, AuthenticationMW, SetJWTClaims, RBAC authorization, reporter scope |
 | `internal/api/rbac` | 100% | `rbac_test.go` — HasAuthorizedRole, role resolution (including reporter), role names |
-| `internal/api/auth` | 92.4% | `auth_test.go` — HMAC and OIDC verification dispatch, signing method selection; `oidc_test.go` — discovery, JWKS caching, roles claim extraction, token validation |
+| `internal/api/auth` | 90.1% | `oidc_test.go` — discovery, JWKS validation, roles claim extraction, token validation |

@@ -14,7 +14,7 @@ import (
 // creator → pending_review → operator approves → reviewed → planned →
 // in_progress → completed.
 func TestWorkflow_CreatorToCompletionViaOperator(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	// Step 1: Creator creates → pending_review.
@@ -44,7 +44,7 @@ func TestWorkflow_CreatorToCompletionViaOperator(t *testing.T) {
 // TestWorkflow_CreatorToCompletionViaAdmin verifies the full lifecycle
 // driven entirely by admin after creator submission.
 func TestWorkflow_CreatorToCompletionViaAdmin(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, maintenanceData(), creatorTokenA)
@@ -68,7 +68,7 @@ func TestWorkflow_CreatorToCompletionViaAdmin(t *testing.T) {
 // TestWorkflow_OperatorFullLifecycle verifies that operator can manage
 // the entire lifecycle of an event they created (starts at planned).
 func TestWorkflow_OperatorFullLifecycle(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, maintenanceData(), operatorToken)
@@ -89,7 +89,7 @@ func TestWorkflow_OperatorFullLifecycle(t *testing.T) {
 // TestWorkflow_CancellationFromAnyStatus verifies that operator and admin
 // can cancel a maintenance event from any active status.
 func TestWorkflow_CancellationFromAnyStatus(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 
 	cancellableStatuses := []event.Status{
 		event.MaintenancePendingReview,
@@ -118,7 +118,7 @@ func TestWorkflow_CancellationFromAnyStatus(t *testing.T) {
 // TestWorkflow_CreatorBlockedAfterApproval verifies that once an event
 // is approved (reviewed), the creator can no longer modify it.
 func TestWorkflow_CreatorBlockedAfterApproval(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, maintenanceData(), creatorTokenA)
@@ -146,7 +146,7 @@ func TestWorkflow_CreatorBlockedAfterApproval(t *testing.T) {
 // TestWorkflow_OperatorApprovesAndPlans verifies the operator's ability
 // to take a pending_review event through approval and planning.
 func TestWorkflow_OperatorApprovesAndPlans(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, maintenanceData(), creatorTokenA)
@@ -164,7 +164,7 @@ func TestWorkflow_OperatorApprovesAndPlans(t *testing.T) {
 // TestWorkflow_UpdateHistoryPreserved verifies that each status transition
 // adds an entry to the updates array.
 func TestWorkflow_UpdateHistoryPreserved(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, maintenanceData(), creatorTokenA)

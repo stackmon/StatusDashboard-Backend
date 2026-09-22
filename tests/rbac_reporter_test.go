@@ -47,7 +47,7 @@ func postJSON(t *testing.T, r *gin.Engine, path string, body []byte, token strin
 // TestReporter_CanCreateSystemIncident covers the single write path a
 // reporter role is allowed to use: a machine-reported incident.
 func TestReporter_CanCreateSystemIncident(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, systemIncidentData(), reporterToken)
@@ -58,7 +58,7 @@ func TestReporter_CanCreateSystemIncident(t *testing.T) {
 }
 
 func TestReporter_CannotCreateHumanEvents(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 
 	tests := []struct {
 		name string
@@ -79,7 +79,7 @@ func TestReporter_CannotCreateHumanEvents(t *testing.T) {
 }
 
 func TestReporter_CannotMutateEvents(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, systemIncidentData(), creatorTokenA)
@@ -116,7 +116,7 @@ func TestReporter_CannotWriteComponents(t *testing.T) {
 // TestReporter_PublicView checks that reporters never receive the internal
 // fields reserved for human roles.
 func TestReporter_PublicView(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, maintenanceData(), adminToken)

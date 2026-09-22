@@ -1,60 +1,54 @@
 package tests
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"net/http"
 	"testing"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestToken_InvalidSignature verifies that a JWT signed with a wrong secret
-// is rejected with 401 on both POST and PATCH endpoints.
-func TestToken_InvalidSignature(t *testing.T) {
-	r := initTestsWithHMAC(t)
+// TestToken_ForeignSignature verifies that a token signed by a key the identity
+// provider does not publish is rejected with 401 on POST and PATCH.
+func TestToken_ForeignSignature(t *testing.T) {
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
-	wrongSecretToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"preferred_username": "user-a",
-		"groups":             []interface{}{creatorRole},
-	})
-	invalidToken, err := wrongSecretToken.SignedString([]byte("wrong-secret"))
+	foreignKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
+	foreignToken := signToken(foreignKey, tokenClaims("user-a", creatorRole))
 
 	t.Run("POST returns 401", func(t *testing.T) {
-		w, _ := createEvent(t, r, maintenanceData(), invalidToken)
+		w, _ := createEvent(t, r, maintenanceData(), foreignToken)
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})
 
 	t.Run("PATCH returns 401", func(t *testing.T) {
 		resp := createEventOK(t, r, maintenanceData(), creatorTokenA)
 		inc := getEventOK(t, r, resp.Result[0].IncidentID, creatorTokenA)
-		assertPatchStatus(t, r, inc.ID, "pending_review", intPtr(eventVersion(inc)), invalidToken, http.StatusUnauthorized)
+		assertPatchStatus(t, r, inc.ID, "pending_review", intPtr(eventVersion(inc)), foreignToken, http.StatusUnauthorized)
 	})
 }
 
-// TestToken_InvalidGroupsClaim verifies that a JWT with groups as a string
-// (instead of array) is rejected with 401.
-func TestToken_InvalidGroupsClaim(t *testing.T) {
-	r := initTestsWithHMAC(t)
+// TestToken_MalformedRolesClaim verifies that a token whose roles claim has an
+// unexpected shape carries no roles, so write access is refused with 403.
+func TestToken_MalformedRolesClaim(t *testing.T) {
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
-	invalidClaimsToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"preferred_username": "user-a",
-		"groups":             "sd_creators", // string instead of []interface{}
-	})
-	tokenStr, err := invalidClaimsToken.SignedString([]byte(testHMACSecret))
-	require.NoError(t, err)
+	claims := tokenClaims("user-a")
+	claims[testRolesClaim] = 42
 
-	w, _ := createEvent(t, r, maintenanceData(), tokenStr)
-	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	w, _ := createEvent(t, r, maintenanceData(), signToken(testIDP.key, claims))
+	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
-// TestToken_ValidClaimsSucceeds verifies that a properly signed JWT with
-// correct claims structure is accepted.
+// TestToken_ValidClaimsSucceeds verifies that a properly signed token with the
+// expected claims is accepted.
 func TestToken_ValidClaimsSucceeds(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	w, resp := createEvent(t, r, maintenanceData(), creatorTokenA)
