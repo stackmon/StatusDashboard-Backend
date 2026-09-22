@@ -65,8 +65,8 @@ OIDC is mandatory — the application fails to start with a clear error when it 
 Example:
 
 ```shell
-SD_OIDC_ISSUER=https://zitadel.eco-preprod.tsi-dev.otc-service.com
-SD_OIDC_CLIENT_ID=390700708019568682
+SD_OIDC_ISSUER=https://zitadel.example.com
+SD_OIDC_CLIENT_ID=your-zitadel-project-id
 ```
 
 `SD_OIDC_ISSUER` and `SD_OIDC_CLIENT_ID` are validated together: setting only one of them is a

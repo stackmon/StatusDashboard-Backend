@@ -21,7 +21,7 @@ const (
 	testKeyID         = "test-key"
 	testRolesClaim    = "urn:zitadel:iam:org:project:roles"
 	testUsernameClaim = "preferred_username"
-	testOrgID         = "390700708019568682"
+	testOrgID         = "123456789012345678"
 )
 
 // testIDP is a local OpenID Connect server publishing one RSA key.
@@ -101,9 +101,9 @@ func TestProviderVerify(t *testing.T) {
 		token := idp.token(t, func(claims map[string]any) {
 			claims[testUsernameClaim] = "alice"
 			claims[testRolesClaim] = map[string]any{
-				"sd_admins":    map[string]any{testOrgID: "zitadel.otc-service.com"},
-				"sd_creators":  map[string]any{testOrgID: "zitadel.otc-service.com"},
-				"unknown_role": map[string]any{testOrgID: "zitadel.otc-service.com"},
+				"sd_admins":    map[string]any{testOrgID: "zitadel.example.com"},
+				"sd_creators":  map[string]any{testOrgID: "zitadel.example.com"},
+				"unknown_role": map[string]any{testOrgID: "zitadel.example.com"},
 			}
 		})
 
@@ -122,7 +122,7 @@ func TestProviderVerify(t *testing.T) {
 
 		token := idp.token(t, func(claims map[string]any) {
 			claims[testRolesClaim] = map[string]any{
-				testOrgID: map[string]any{"sd_operators": "zitadel.otc-service.com"},
+				testOrgID: map[string]any{"sd_operators": "zitadel.example.com"},
 			}
 		})
 

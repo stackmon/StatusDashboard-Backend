@@ -360,7 +360,7 @@ func TestService_RoleNames(t *testing.T) {
 func TestService_CommaSeparatedConfig(t *testing.T) {
 	svc := New(testConfig("sd_creators", "sd_operators", "sd-admins,sd_readers"))
 
-	// Real token roles from preprod Zitadel (truncated for brevity)
+	// Real token roles (truncated for brevity)
 	zitadelRoles := []string{
 		"sd_readers",
 		"/sd-admins",

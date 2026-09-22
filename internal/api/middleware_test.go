@@ -29,7 +29,7 @@ const (
 	testKeyID         = "test-key"
 	testUsernameClaim = "preferred_username"
 	testRolesClaim    = "urn:zitadel:iam:org:project:roles"
-	testOrgID         = "390700708019568682"
+	testOrgID         = "123456789012345678"
 )
 
 // testIDP is a local OpenID Connect server publishing one RSA key.

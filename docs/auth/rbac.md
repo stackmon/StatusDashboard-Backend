@@ -156,11 +156,11 @@ Zitadel access token claims used by the API:
 
 ```json
 {
-  "sub": "289257162845356033",
-  "aud": ["390700708019568682", "289257162845356225"],
+  "sub": "100000000000000001",
+  "aud": ["123456789012345678", "234567890123456789"],
   "urn:zitadel:iam:org:project:roles": {
     "sd_creators": {
-      "390700708019568682": "eco-preprod.tsi-dev.otc-service.com"
+      "111111111111111111": "zitadel.example.com"
     }
   }
 }

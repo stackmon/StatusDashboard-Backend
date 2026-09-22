@@ -23,7 +23,7 @@ const (
 	// testRolesClaim is the project roles claim Zitadel emits, nesting the
 	// organisation id below the role name.
 	testRolesClaim = "urn:zitadel:iam:org:project:roles"
-	testOrgID      = "390700708019568682"
+	testOrgID      = "123456789012345678"
 	// testUsernameClaim is the claim Zitadel fills for human users; machine accounts have none.
 	testUsernameClaim = "preferred_username"
 )
