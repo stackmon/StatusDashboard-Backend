@@ -13,7 +13,7 @@ import (
 // TestVisibility_PendingReviewHiddenFromUnauth verifies that maintenance
 // events in pending_review status are not visible to unauthenticated users.
 func TestVisibility_PendingReviewHiddenFromUnauth(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	// Create a pending_review event (creator).
@@ -37,7 +37,7 @@ func TestVisibility_PendingReviewHiddenFromUnauth(t *testing.T) {
 // TestVisibility_PendingReviewVisibleToAuth verifies that authenticated
 // users can see pending_review events.
 func TestVisibility_PendingReviewVisibleToAuth(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, maintenanceData(), creatorTokenA)
@@ -77,7 +77,7 @@ func TestVisibility_PendingReviewVisibleToAuth(t *testing.T) {
 // creator fields are visible to authenticated users but hidden from
 // unauthenticated users.
 func TestVisibility_ContactEmailAndCreator(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	// Create a maintenance event (visible to unauth since it starts as planned).
@@ -101,7 +101,7 @@ func TestVisibility_ContactEmailAndCreator(t *testing.T) {
 // TestVisibility_AuthVsUnauthEventList verifies that authenticated users
 // see more events than unauthenticated users (pending_review included).
 func TestVisibility_AuthVsUnauthEventList(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	// Create one planned (visible) and one pending_review (hidden from unauth).
@@ -124,7 +124,7 @@ func TestVisibility_AuthVsUnauthEventList(t *testing.T) {
 // TestVisibility_CancelledMaintenanceWithoutPublicStatus verifies that
 // a maintenance cancelled before reaching "planned" is hidden from unauthenticated users.
 func TestVisibility_CancelledMaintenanceWithoutPublicStatus(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	// Creator creates maintenance → pending_review.
@@ -158,7 +158,7 @@ func TestVisibility_CancelledMaintenanceWithoutPublicStatus(t *testing.T) {
 // TestVisibility_CancelledMaintenanceAfterPlanned verifies that a maintenance
 // cancelled after reaching "planned" remains visible to unauthenticated users.
 func TestVisibility_CancelledMaintenanceAfterPlanned(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	// Admin creates maintenance → planned.
@@ -182,7 +182,7 @@ func TestVisibility_CancelledMaintenanceAfterPlanned(t *testing.T) {
 // pending_review and reviewed statuses are filtered from the Updates array
 // for unauthenticated users.
 func TestVisibility_InternalStatusesFilteredFromUpdates(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	// Creator creates → pending_review, then operator approves → reviewed → planned.
@@ -220,7 +220,7 @@ func TestVisibility_InternalStatusesFilteredFromUpdates(t *testing.T) {
 // TestVisibility_ReviewedHiddenFromUnauth verifies that maintenance events
 // in reviewed status are not visible to unauthenticated users.
 func TestVisibility_ReviewedHiddenFromUnauth(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	// Creator creates → pending_review, operator moves to reviewed.
@@ -250,7 +250,7 @@ func TestVisibility_ReviewedHiddenFromUnauth(t *testing.T) {
 // TestVisibility_CancelledAfterReviewedHidden verifies that a maintenance
 // cancelled from reviewed status (never reached planned) is hidden from unauth.
 func TestVisibility_CancelledAfterReviewedHidden(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	// Creator creates → pending_review, operator reviews, admin cancels.
@@ -284,7 +284,7 @@ func TestVisibility_CancelledAfterReviewedHidden(t *testing.T) {
 // TestVisibility_IncidentNotFiltered verifies that incident events are never
 // affected by the maintenance visibility rules.
 func TestVisibility_IncidentNotFiltered(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, incidentData(), adminToken)
@@ -319,7 +319,7 @@ func TestVisibility_IncidentNotFiltered(t *testing.T) {
 // TestVisibility_InfoEventNotFiltered verifies that info events are never
 // affected by the maintenance visibility rules.
 func TestVisibility_InfoEventNotFiltered(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	infoEvt := infoEventData()

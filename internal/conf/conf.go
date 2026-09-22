@@ -23,10 +23,6 @@ const (
 	// DefaultRolesClaim is the Zitadel claim carrying the project roles of the
 	// authenticated subject.
 	DefaultRolesClaim = "urn:zitadel:iam:org:project:roles"
-
-	// MinSecretKeyLength is the minimum required length for the HMAC secret key.
-	// HMAC-SHA256 requires at least 32 bytes for cryptographic strength.
-	MinSecretKeyLength = 32
 )
 
 type Config struct {
@@ -36,14 +32,11 @@ type Config struct {
 	// Cache connection uri
 	// It can be redis format or internal
 	Cache string `envconfig:"CACHE"`
-	// OIDC settings of the external identity provider (Zitadel)
-	OIDC *OIDC `envconfig:"OIDC"`
+	OIDC  OIDC   `envconfig:"OIDC"`
 	// Log level for verbosity
 	LogLevel string `envconfig:"LOG_LEVEL"`
 	// App port
 	Port string `envconfig:"PORT"`
-	// Secret key for local HMAC authentication (dev, tests, service-to-service)
-	SecretKeyV1 string `envconfig:"SECRET_KEY"`
 	// OpenAPISpecPath is the filesystem path to the OpenAPI spec served at
 	// /openapi.json. Defaults to "openapi.yaml" (resolved relative to the
 	// process working directory, matching the container's WORKDIR layout).
@@ -72,8 +65,7 @@ type RBACConfig struct {
 	GroupsReporters string `envconfig:"GROUPS_REPORTERS"`
 }
 
-// OIDC configures the external identity provider. ClientID is the audience the
-// resource server accepts: every token must be issued to that client.
+// OIDC configures the external identity provider (Zitadel).
 type OIDC struct {
 	Issuer        string `envconfig:"ISSUER"`
 	ClientID      string `envconfig:"CLIENT_ID"`
@@ -90,36 +82,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("wrong port for http server")
 	}
 
-	if provErr := c.validateProviders(); provErr != nil {
-		return provErr
+	if c.OIDC.Issuer == "" || c.OIDC.ClientID == "" {
+		return fmt.Errorf("SD_OIDC_ISSUER and SD_OIDC_CLIENT_ID are required")
 	}
 
 	if rbacErr := c.RBAC.Validate(); rbacErr != nil {
 		return rbacErr
-	}
-
-	return nil
-}
-
-// validateProviders ensures at least one authentication provider is configured.
-func (c *Config) validateProviders() error {
-	hasIssuer := c.OIDC != nil && c.OIDC.Issuer != ""
-	hasClientID := c.OIDC != nil && c.OIDC.ClientID != ""
-
-	if hasIssuer != hasClientID {
-		return fmt.Errorf("SD_OIDC_ISSUER and SD_OIDC_CLIENT_ID must be configured together")
-	}
-
-	hasOIDC := hasIssuer && hasClientID
-	hasLocal := c.SecretKeyV1 != ""
-
-	if !hasOIDC && !hasLocal {
-		return fmt.Errorf("at least one authentication provider must be configured: " +
-			"set SD_OIDC_ISSUER with SD_OIDC_CLIENT_ID for Zitadel or SD_SECRET_KEY for local HMAC")
-	}
-
-	if hasLocal && len(c.SecretKeyV1) < MinSecretKeyLength {
-		return fmt.Errorf("SD_SECRET_KEY must be at least %d characters for HMAC-SHA256 security", MinSecretKeyLength)
 	}
 
 	return nil
@@ -168,7 +136,7 @@ func (c *Config) FillDefaults() {
 
 	c.RBAC.applyLegacyRoleNames()
 
-	if c.OIDC != nil && c.OIDC.RolesClaim == "" {
+	if c.OIDC.RolesClaim == "" {
 		c.OIDC.RolesClaim = DefaultRolesClaim
 	}
 
@@ -208,7 +176,7 @@ const envConfigTag = "envconfig"
 
 // mergeConfigs allow to merge config params from env variables and .env file.
 // It checks the Config struct and if the value is missing, it set up the value from .env file.
-func mergeConfigs(env map[string]string, obj any, prefix string) error { //nolint:gocognit
+func mergeConfigs(env map[string]string, obj any, prefix string) error {
 	if env == nil {
 		return nil
 	}
@@ -231,19 +199,7 @@ func mergeConfigs(env map[string]string, obj any, prefix string) error { //nolin
 		field := t.Field(i)
 		value := v.Field(i)
 
-		// Handle pointer to struct (e.g., *OIDC)
-		if value.Kind() == reflect.Ptr && value.Elem().Kind() == reflect.Struct {
-			envValueTag := field.Tag.Get(envConfigTag)
-			confPrefix := fmt.Sprintf("%s_%s", prefix, envValueTag)
-			err := mergeConfigs(env, value.Interface(), confPrefix)
-			if err != nil {
-				return err
-			}
-
-			continue
-		}
-
-		// Handle embedded struct (e.g., RBACConfig)
+		// Handle embedded struct (e.g., RBACConfig or OIDC)
 		// For struct values (not pointers), we need to pass a pointer
 		if value.Kind() == reflect.Struct {
 			envValueTag := field.Tag.Get(envConfigTag)
@@ -276,13 +232,6 @@ func mergeConfigs(env map[string]string, obj any, prefix string) error { //nolin
 	return nil
 }
 
-func maskSecret(s string) string {
-	if s == "" {
-		return ""
-	}
-	return "<hidden>"
-}
-
 func sanitizeDBString(dbURL string) string {
 	if dbURL == "" {
 		return ""
@@ -306,12 +255,13 @@ func (c *Config) Log(logger *zap.Logger) {
 	)
 
 	logger.Info("Authentication configuration",
-		zap.Bool("oidc_configured", c.OIDC != nil && c.OIDC.Issuer != ""),
-		zap.Bool("local_hmac_configured", c.SecretKeyV1 != ""),
+		zap.String("issuer", c.OIDC.Issuer),
+		zap.String("client_id", c.OIDC.ClientID),
+		zap.String("roles_claim", c.OIDC.RolesClaim),
+		zap.String("username_claim", c.OIDC.UsernameClaim),
 		zap.String("creators_role", c.RBAC.Creators),
 		zap.String("operators_role", c.RBAC.Operators),
 		zap.String("admins_role", c.RBAC.Admins),
-		zap.String("secret_key_v1", maskSecret(c.SecretKeyV1)),
 	)
 
 	logger.Info("Storage and logging configuration",
@@ -324,14 +274,5 @@ func (c *Config) Log(logger *zap.Logger) {
 	if c.RBAC.legacyRoleNamesUsed() {
 		logger.Warn("SD_RBAC_GROUPS_* variables are deprecated, use SD_RBAC_ROLES_* instead",
 			zap.String("deprecated_admins", c.RBAC.GroupsAdmins))
-	}
-
-	if c.OIDC != nil {
-		logger.Info("OIDC configuration",
-			zap.String("issuer", c.OIDC.Issuer),
-			zap.String("client_id", c.OIDC.ClientID),
-			zap.String("roles_claim", c.OIDC.RolesClaim),
-			zap.String("username_claim", c.OIDC.UsernameClaim),
-		)
 	}
 }

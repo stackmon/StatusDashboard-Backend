@@ -63,9 +63,12 @@ func TestRBACConfig_Validate(t *testing.T) {
 
 func TestConfig_Validate_PropagatesRBACError(t *testing.T) {
 	cfg := &Config{
-		Port:        "8000",
-		SecretKeyV1: "test-secret-key-minimum-length!!", // 32 chars
-		RBAC:        RBACConfig{},
+		Port: "8000",
+		OIDC: OIDC{
+			Issuer:   "https://zitadel.example.com",
+			ClientID: "status-dashboard",
+		},
+		RBAC: RBACConfig{},
 	}
 
 	err := cfg.Validate()
@@ -73,7 +76,7 @@ func TestConfig_Validate_PropagatesRBACError(t *testing.T) {
 	assert.Contains(t, err.Error(), "SD_RBAC_ROLES_ADMINS")
 }
 
-func TestConfig_Validate_RequiresProvider(t *testing.T) {
+func TestConfig_Validate_RequiresOIDC(t *testing.T) {
 	tests := []struct {
 		name      string
 		cfg       Config
@@ -81,53 +84,31 @@ func TestConfig_Validate_RequiresProvider(t *testing.T) {
 		errSubstr string
 	}{
 		{
-			name: "No provider configured fails",
+			name: "Issuer and client id pass",
+			cfg: Config{
+				Port: "8000",
+				OIDC: OIDC{
+					Issuer:   "https://zitadel.example.com",
+					ClientID: "status-dashboard",
+				},
+				RBAC: RBACConfig{Admins: "sd_admins"},
+			},
+			expectErr: false,
+		},
+		{
+			name: "No issuer and no client id fails",
 			cfg: Config{
 				Port: "8000",
 				RBAC: RBACConfig{Admins: "sd_admins"},
 			},
 			expectErr: true,
-			errSubstr: "at least one authentication provider",
-		},
-		{
-			name: "Local HMAC provider passes",
-			cfg: Config{
-				Port:        "8000",
-				SecretKeyV1: "my-secret-key-that-is-32-chars!!", // 32 chars
-				RBAC:        RBACConfig{Admins: "sd_admins"},
-			},
-			expectErr: false,
-		},
-		{
-			name: "Zitadel OIDC provider passes",
-			cfg: Config{
-				Port: "8000",
-				OIDC: &OIDC{
-					Issuer:   "https://zitadel.example.com",
-					ClientID: "status-dashboard",
-				},
-				RBAC: RBACConfig{Admins: "sd_admins"},
-			},
-			expectErr: false,
-		},
-		{
-			name: "Both providers configured passes",
-			cfg: Config{
-				Port:        "8000",
-				SecretKeyV1: "my-secret-key-that-is-32-chars!!", // 32 chars
-				OIDC: &OIDC{
-					Issuer:   "https://zitadel.example.com",
-					ClientID: "status-dashboard",
-				},
-				RBAC: RBACConfig{Admins: "sd_admins"},
-			},
-			expectErr: false,
+			errSubstr: "SD_OIDC_ISSUER and SD_OIDC_CLIENT_ID",
 		},
 		{
 			name: "Issuer without client id fails",
 			cfg: Config{
 				Port: "8000",
-				OIDC: &OIDC{
+				OIDC: OIDC{
 					Issuer: "https://zitadel.example.com",
 				},
 				RBAC: RBACConfig{Admins: "sd_admins"},
@@ -139,7 +120,7 @@ func TestConfig_Validate_RequiresProvider(t *testing.T) {
 			name: "Client id without issuer fails",
 			cfg: Config{
 				Port: "8000",
-				OIDC: &OIDC{
+				OIDC: OIDC{
 					ClientID: "status-dashboard",
 				},
 				RBAC: RBACConfig{Admins: "sd_admins"},
@@ -162,59 +143,13 @@ func TestConfig_Validate_RequiresProvider(t *testing.T) {
 	}
 }
 
-func TestConfig_Validate_MinSecretKeyLength(t *testing.T) {
-	tests := []struct {
-		name      string
-		secret    string
-		expectErr bool
-		errSubstr string
-	}{
-		{
-			name:      "Short secret fails",
-			secret:    "too-short",
-			expectErr: true,
-			errSubstr: "at least 32 characters",
-		},
-		{
-			name:      "31-char secret fails",
-			secret:    "1234567890123456789012345678901", // 31 chars
-			expectErr: true,
-			errSubstr: "at least 32 characters",
-		},
-		{
-			name:      "32-char secret passes",
-			secret:    "12345678901234567890123456789012", // 32 chars
-			expectErr: false,
-		},
-		{
-			name:      "64-char secret passes",
-			secret:    "1234567890123456789012345678901234567890123456789012345678901234", // 64 chars
-			expectErr: false,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := Config{
-				Port:        "8000",
-				SecretKeyV1: tc.secret,
-				RBAC:        RBACConfig{Admins: "admins"},
-			}
-			err := cfg.Validate()
-			if tc.expectErr {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.errSubstr)
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
-}
-
 func TestConfig_Validate_PortValidation(t *testing.T) {
 	base := Config{
-		SecretKeyV1: "secret-key-that-is-32-chars-long", // 32 chars
-		RBAC:        RBACConfig{Admins: "admins"},
+		OIDC: OIDC{
+			Issuer:   "https://zitadel.example.com",
+			ClientID: "status-dashboard",
+		},
+		RBAC: RBACConfig{Admins: "admins"},
 	}
 
 	tests := []struct {
@@ -269,15 +204,15 @@ func TestFillDefaults(t *testing.T) {
 		assert.Equal(t, "custom.yaml", c.OpenAPISpecPath)
 	})
 
-	t.Run("defaults the roles claim when OIDC is configured", func(t *testing.T) {
-		c := &Config{OIDC: &OIDC{Issuer: "https://zitadel.example.com"}}
+	t.Run("defaults the roles claim", func(t *testing.T) {
+		c := &Config{}
 		c.FillDefaults()
 
 		assert.Equal(t, DefaultRolesClaim, c.OIDC.RolesClaim)
 	})
 
 	t.Run("keeps a custom roles claim", func(t *testing.T) {
-		c := &Config{OIDC: &OIDC{Issuer: "https://zitadel.example.com", RolesClaim: "roles"}}
+		c := &Config{OIDC: OIDC{RolesClaim: "roles"}}
 		c.FillDefaults()
 
 		assert.Equal(t, "roles", c.OIDC.RolesClaim)
@@ -308,12 +243,6 @@ func TestFillDefaults(t *testing.T) {
 		assert.Equal(t, "sd_creators", c.RBAC.Creators)
 		assert.Equal(t, "legacy_admins", c.RBAC.Admins)
 	})
-}
-
-func TestMaskSecret(t *testing.T) {
-	assert.Empty(t, maskSecret(""))
-	assert.Equal(t, "<hidden>", maskSecret("my-secret"))
-	assert.Equal(t, "<hidden>", maskSecret("x"))
 }
 
 func TestSanitizeDBString(t *testing.T) {
@@ -366,7 +295,7 @@ func TestMergeConfigs(t *testing.T) {
 	})
 
 	t.Run("fills empty string fields from env map", func(t *testing.T) {
-		c := &Config{OIDC: &OIDC{}}
+		c := &Config{}
 		env := map[string]string{
 			"SD_DB":        "postgresql://localhost/test",
 			"SD_LOG_LEVEL": "info",
@@ -378,7 +307,7 @@ func TestMergeConfigs(t *testing.T) {
 	})
 
 	t.Run("does not overwrite existing values", func(t *testing.T) {
-		c := &Config{DB: "existing", OIDC: &OIDC{}}
+		c := &Config{DB: "existing"}
 		env := map[string]string{
 			"SD_DB": "overwritten",
 		}
@@ -388,7 +317,7 @@ func TestMergeConfigs(t *testing.T) {
 	})
 
 	t.Run("merges into embedded struct (RBACConfig)", func(t *testing.T) {
-		c := &Config{OIDC: &OIDC{}}
+		c := &Config{}
 		env := map[string]string{
 			"SD_RBAC_ROLES_ADMINS":    "my-admins",
 			"SD_RBAC_GROUPS_CREATORS": "legacy-creators",
@@ -399,9 +328,8 @@ func TestMergeConfigs(t *testing.T) {
 		assert.Equal(t, "legacy-creators", c.RBAC.GroupsCreators)
 	})
 
-	t.Run("merges into pointer struct (OIDC)", func(t *testing.T) {
-		oidcCfg := &OIDC{}
-		c := &Config{OIDC: oidcCfg}
+	t.Run("merges into embedded struct (OIDC)", func(t *testing.T) {
+		c := &Config{}
 		env := map[string]string{
 			"SD_OIDC_ISSUER":    "https://zitadel.example.com",
 			"SD_OIDC_CLIENT_ID": "status-dashboard",
@@ -416,25 +344,13 @@ func TestMergeConfigs(t *testing.T) {
 func TestConfig_Log(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 
-	t.Run("logs without OIDC", func(t *testing.T) {
+	t.Run("logs the OIDC and RBAC configuration", func(t *testing.T) {
 		c := &Config{
-			Port:        "8000",
-			SecretKeyV1: "secret-key-that-is-32-chars-long",
-			DB:          "postgresql://user:pass@localhost:5432/db",
-			LogLevel:    "devel",
-			RBAC:        RBACConfig{Admins: "admins"},
-		}
-		assert.NotPanics(t, func() { c.Log(logger) })
-	})
-
-	t.Run("logs with OIDC", func(t *testing.T) {
-		c := &Config{
-			Port:        "8000",
-			SecretKeyV1: "secret-key-that-is-32-chars-long",
-			DB:          "postgresql://localhost:5432/db",
-			LogLevel:    "devel",
-			RBAC:        RBACConfig{Admins: "admins"},
-			OIDC: &OIDC{
+			Port:     "8000",
+			DB:       "postgresql://localhost:5432/db",
+			LogLevel: "devel",
+			RBAC:     RBACConfig{Admins: "admins"},
+			OIDC: OIDC{
 				Issuer:        "https://zitadel.example.com",
 				ClientID:      "status-dashboard",
 				RolesClaim:    DefaultRolesClaim,

@@ -63,15 +63,22 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	// Only set up cleanup if container was created successfully
+	mappedPort, errPort := container.MappedPort(ctx, "5432/tcp")
+	if errPort != nil {
+		log.Printf("failed to resolve the mapped postgres port: %s", errPort)
+		if errTerm := testcontainers.TerminateContainer(container); errTerm != nil {
+			log.Printf("failed to terminate container: %s", errTerm)
+		}
+		os.Exit(1)
+	}
+	port := mappedPort.Port()
+
+	// Only set up cleanup once the container is reachable
 	defer func() {
 		if err = testcontainers.TerminateContainer(container); err != nil {
 			log.Printf("failed to terminate container: %s", err)
 		}
 	}()
-
-	ports, _ := container.Ports(ctx)
-	port := ports["5432/tcp"][0].HostPort
 	databaseURL = fmt.Sprintf(databaseURL, dbUser, dbPassword, port, dbName)
 
 	// Apply migrations (add sslmode=disable for test container)
@@ -80,6 +87,8 @@ func TestMain(m *testing.M) {
 		log.Printf("failed to apply migrations: %s", err)
 		return
 	}
+
+	defer testIDP.server.Close()
 
 	m.Run()
 }
@@ -124,19 +133,7 @@ func initTests(t *testing.T) (*gin.Engine, *db.DB) {
 
 	logger, _ := zap.NewDevelopment()
 
-	// Provide RBAC role names and the local HMAC secret so conf.Validate() passes.
-	t.Setenv("SD_SECRET_KEY", testHMACSecret)
-	t.Setenv("SD_RBAC_ROLES_CREATORS", creatorRole)
-	t.Setenv("SD_RBAC_ROLES_OPERATORS", operatorRole)
-	t.Setenv("SD_RBAC_ROLES_ADMINS", adminRole)
-	t.Setenv("SD_RBAC_ROLES_REPORTERS", reporterRole)
-
-	cfg, err := conf.LoadConf()
-	require.NoError(t, err)
-
-	// SD_OIDC_ISSUER is not set here, so the tests exercise the transitional
-	// local HMAC branch, like a deployment without Zitadel configured.
-	authn := auth.NewAuthenticator(nil, cfg.SecretKeyV1)
+	authn := testIDP.provider(t, testRBACService().RoleNames()...)
 
 	initRoutesV1(t, r, d, authn, logger)
 	initRoutesV2(t, r, d, authn, logger)
@@ -144,7 +141,7 @@ func initTests(t *testing.T) (*gin.Engine, *db.DB) {
 	return r, d
 }
 
-func initRoutesV1(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Authenticator, logger *zap.Logger) {
+func initRoutesV1(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Provider, logger *zap.Logger) {
 	t.Helper()
 	t.Log("init routes for V1")
 
@@ -159,7 +156,7 @@ func initRoutesV1(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Authen
 	v1Api.GET("incidents", v1.GetIncidentsHandler(dbInst, logger))
 }
 
-func initRoutesV2(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Authenticator, logger *zap.Logger) {
+func initRoutesV2(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Provider, logger *zap.Logger) {
 	t.Helper()
 	t.Log("init routes for V2")
 

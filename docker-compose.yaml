@@ -11,8 +11,8 @@ services:
     volumes:
       - db:/var/lib/postgresql/data
 
-# Identity is provided by the external Zitadel instance
-# (SD_OIDC_ISSUER / SD_OIDC_CLIENT_ID); no local IdP container is started.
+# No identity provider container: authentication uses the external Zitadel
+# instance configured by SD_OIDC_ISSUER.
 
 volumes:
   db:

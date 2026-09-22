@@ -72,7 +72,7 @@ func createAtStatus(t *testing.T, r *gin.Engine, target event.Status) int {
 // TestPermissions_OperatorPatchMatrix verifies that operator can PATCH
 // maintenance events in any status (unrestricted, same as admin).
 func TestPermissions_OperatorPatchMatrix(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 
 	tests := []struct {
 		name       string
@@ -107,7 +107,7 @@ func TestPermissions_OperatorPatchMatrix(t *testing.T) {
 // TestPermissions_AdminPatchMatrix verifies that admin can PATCH
 // maintenance events in any status.
 func TestPermissions_AdminPatchMatrix(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 
 	tests := []struct {
 		name       string
@@ -141,7 +141,7 @@ func TestPermissions_AdminPatchMatrix(t *testing.T) {
 // TestPermissions_CreatorPatchRestrictions verifies creator-specific
 // restrictions: own events only, pending_review only, limited target statuses.
 func TestPermissions_CreatorPatchRestrictions(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 
 	t.Run("can patch own pending_review to pending_review", func(t *testing.T) {
 		truncateIncidents(t)
@@ -198,7 +198,7 @@ func TestPermissions_CreatorPatchRestrictions(t *testing.T) {
 // TestPermissions_NoRoleRejected verifies that users with no recognized
 // RBAC group are denied all write operations.
 func TestPermissions_NoRoleRejected(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 
 	t.Run("cannot create event", func(t *testing.T) {
 		truncateIncidents(t)
@@ -217,7 +217,7 @@ func TestPermissions_NoRoleRejected(t *testing.T) {
 // TestPermissions_UnauthenticatedRejected verifies that requests without
 // a valid token are rejected for all write operations.
 func TestPermissions_UnauthenticatedRejected(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 
 	t.Run("no token on POST returns 401", func(t *testing.T) {
 		truncateIncidents(t)

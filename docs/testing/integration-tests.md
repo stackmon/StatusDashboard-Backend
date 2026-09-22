@@ -25,8 +25,9 @@ golangci-lint run ./tests/
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `main_test.go` | 289 | `TestMain` (testcontainers bootstrap), `initTests`, route initialisation with production RBAC middleware, DB helpers (`truncateIncidents`, `restoreFixtureIncident`) |
-| `rbac_helpers_test.go` | 278 | HMAC JWT signing (`testHMACSecret`), `tokenForRole`, pre-built tokens (`adminToken`, `operatorToken`, `creatorToken`), role constants, HTTP request helpers, event factory functions |
+| `main_test.go` | 268 | `TestMain` (testcontainers bootstrap), `initTests`, route initialisation with production RBAC middleware, DB helpers (`truncateIncidents`, `restoreFixtureIncident`) |
+| `rbac_helpers_test.go` | 329 | `initRBACTests`, pre-built tokens (`adminToken`, `operatorToken`, `creatorToken`), role constants, HTTP request helpers, event factory functions |
+| `idp_test.go` | 109 | Local OIDC identity provider serving its JWKS, `tokenClaims`, `signToken`, `tokenForRole` |
 | `dump_test.sql` | — | Fixture data: 6 components (CCE, ECS, DCS × EU-DE/EU-NL), 1 resolved incident |
 
 ---
@@ -238,10 +239,10 @@ Tests verify that each role can only perform the actions allowed by the
 
 | # | Test / Subtest | Scenario | Expected | Spec Ref |
 |---|----------------|----------|----------|----------|
-| 1 | `POST returns 401` | Token signed with wrong HMAC key | 401 | FR-026 |
-| 2 | `PATCH returns 401` | Token signed with wrong HMAC key | 401 | FR-026 |
-| 3 | `InvalidGroupsClaim` | Token with a non-array groups claim (local HMAC branch) | 403 | FR-002 |
-| 4 | `ValidClaimsSucceeds` | Token with valid roles and username (local HMAC branch) | 201 | FR-002a |
+| 1 | `ForeignSignature/POST returns 401` | Token signed by a key the provider does not publish | 401 | FR-026 |
+| 2 | `ForeignSignature/PATCH returns 401` | Token signed by a key the provider does not publish | 401 | FR-026 |
+| 3 | `MalformedRolesClaim` | Role names in a claim of an unexpected type | 403 | FR-002 |
+| 4 | `ValidClaimsSucceeds` | Token with valid roles and username | 200 | FR-002a |
 
 ---
 
@@ -396,7 +397,7 @@ test(s) that verify it.
 
 | Requirement | Description | Covered By |
 |-------------|-------------|------------|
-| FR-002 | Extract roles from the JWT token | `TestToken_InvalidGroupsClaim` |
+| FR-002 | Extract roles from the JWT token | `TestToken_MalformedRolesClaim` |
 | FR-002a | Map role names via SD_RBAC_ROLES_* env vars | `TestToken_ValidClaimsSucceeds` |
 | FR-004 | Creator can create maintenance events | `TestCreation_RoleInitialStatus` |
 | FR-005 | Creator → pending_review initial status | `TestCreation_RoleInitialStatus/creator_creates_maintenance_with_pending_review_status` |
@@ -424,7 +425,7 @@ test(s) that verify it.
 | FR-022-1 | Hide pending_review/reviewed from unauthenticated | `TestVisibility_PendingReviewHiddenFromUnauth` |
 | FR-024 | Creator cannot skip statuses | `TestPermissions_CreatorPatchRestrictions/cannot_patch_planned_event` |
 | FR-025 | Audit trail in incident_status table | `TestWorkflow_UpdateHistoryPreserved` |
-| FR-026 | Validate JWT tokens | `TestToken_InvalidSignature` |
+| FR-026 | Validate JWT tokens | `TestToken_ForeignSignature` |
 | FR-027 | 401 for missing JWT | `TestPermissions_UnauthenticatedRejected` |
 | FR-028 | 403 for insufficient permissions | `TestPermissions_NoRoleRejected` |
 | FR-029 | Validate creator user_id for cross-user access | `TestPermissions_CreatorPatchRestrictions/cannot_patch_another_creators_event` |
@@ -458,7 +459,7 @@ or future test additions):
 | `rbac_creation_test.go` | RBAC | `TestCreation_RoleInitialStatus`, `TestCreation_IncidentByRoles`, `TestCreation_MaintenanceValidation` |
 | `rbac_permissions_test.go` | RBAC | `TestPermissions_OperatorPatchMatrix`, `TestPermissions_AdminPatchMatrix`, `TestPermissions_CreatorPatchRestrictions`, `TestPermissions_NoRoleRejected`, `TestPermissions_UnauthenticatedRejected` |
 | `rbac_reporter_test.go` | RBAC | `TestReporter_CanCreateSystemIncident`, `TestReporter_CannotCreateHumanEvents`, `TestReporter_CannotMutateEvents`, `TestReporter_CannotWriteComponents`, `TestReporter_PublicView` |
-| `rbac_token_test.go` | RBAC | `TestToken_InvalidSignature`, `TestToken_InvalidGroupsClaim`, `TestToken_ValidClaimsSucceeds` |
+| `rbac_token_test.go` | RBAC | `TestToken_ForeignSignature`, `TestToken_MalformedRolesClaim`, `TestToken_ValidClaimsSucceeds` |
 | `rbac_version_test.go` | RBAC | `TestVersion_NilVersionOnMaintenancePatch`, `TestVersion_WrongVersionOnMaintenancePatch`, `TestVersion_NilVersionOnIncidentPatch`, `TestVersion_WrongVersionOnIncidentPatch`, `TestVersion_ConcurrentMaintenancePatch` |
 | `rbac_visibility_test.go` | RBAC | `TestVisibility_PendingReviewHiddenFromUnauth`, `TestVisibility_PendingReviewVisibleToAuth`, `TestVisibility_ContactEmailAndCreator`, `TestVisibility_AuthVsUnauthEventList` |
 | `rbac_workflow_test.go` | RBAC | `TestWorkflow_CreatorToCompletionViaOperator`, `TestWorkflow_CreatorToCompletionViaAdmin`, `TestWorkflow_OperatorFullLifecycle`, `TestWorkflow_CancellationFromAnyStatus`, `TestWorkflow_CreatorBlockedAfterApproval`, `TestWorkflow_OperatorApprovesAndPlans`, `TestWorkflow_UpdateHistoryPreserved` |
@@ -483,7 +484,7 @@ go test ./internal/... -count=1
 
 | Package | Coverage | Key Test Files |
 |---------|----------|---------------|
-| `internal/conf` | 75.1% | `conf_test.go` — Validate, MinSecretKeyLength, PortValidation, FillDefaults, legacy role names, maskSecret, sanitizeDBString, mergeConfigs, Log |
-| `internal/api` | 51.3% | `middleware_test.go` — OIDC and HMAC verification, AuthenticationMW, SetJWTClaims, RBAC authorization, reporter scope |
+| `internal/conf` | 70.7% | `conf_test.go` — Validate, PortValidation, FillDefaults, legacy role names, SanitizeDBString, mergeConfigs, Log |
+| `internal/api` | 49.2% | `middleware_test.go` — OIDC verification, AuthenticationMW, SetJWTClaims, RBAC authorization, reporter scope |
 | `internal/api/rbac` | 100% | `rbac_test.go` — HasAuthorizedRole, role resolution (including reporter), role names |
-| `internal/api/auth` | 92.4% | `auth_test.go` — HMAC and OIDC verification dispatch, signing method selection; `oidc_test.go` — discovery, JWKS caching, roles claim extraction, token validation |
+| `internal/api/auth` | 90.1% | `oidc_test.go` — discovery, JWKS validation, roles claim extraction, token validation |

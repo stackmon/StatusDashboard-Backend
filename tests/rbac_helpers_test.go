@@ -10,13 +10,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/stackmon/otc-status-dashboard/internal/api"
-	"github.com/stackmon/otc-status-dashboard/internal/api/auth"
 	apiErrors "github.com/stackmon/otc-status-dashboard/internal/api/errors"
 	"github.com/stackmon/otc-status-dashboard/internal/api/rbac"
 	v2 "github.com/stackmon/otc-status-dashboard/internal/api/v2"
@@ -26,8 +24,6 @@ import (
 )
 
 const (
-	testHMACSecret = "test-secret-key-for-rbac-tests!!"
-
 	creatorRole  = "sd_creators"
 	operatorRole = "sd_operators"
 	adminRole    = "sd_admins"
@@ -48,9 +44,9 @@ func testRBACService() *rbac.Service {
 	})
 }
 
-// initTestsWithHMAC sets up a router with RBAC middleware using HMAC-signed
-// JWTs. Does not require Zitadel or environment variables.
-func initTestsWithHMAC(t *testing.T) *gin.Engine {
+// initRBACTests sets up a router with the RBAC protected v2 routes and the
+// role mapping of the production configuration.
+func initRBACTests(t *testing.T) *gin.Engine {
 	t.Helper()
 
 	d, err := db.New(&conf.Config{DB: databaseURL})
@@ -62,7 +58,7 @@ func initTestsWithHMAC(t *testing.T) *gin.Engine {
 	r.Use(api.ErrorHandle())
 
 	logger, _ := zap.NewDevelopment()
-	authn := auth.NewAuthenticator(nil, testHMACSecret)
+	authn := testIDP.provider(t, testRBACService().RoleNames()...)
 	rbacSvc := testRBACService()
 
 	v2Api := r.Group("v2")
@@ -100,25 +96,7 @@ func initTestsWithHMAC(t *testing.T) *gin.Engine {
 	return r
 }
 
-// tokenForRole creates a signed HMAC JWT for the given user and roles.
-func tokenForRole(userID string, roles ...string) string {
-	ifaceRoles := make([]interface{}, len(roles))
-	for i, role := range roles {
-		ifaceRoles[i] = role
-	}
-	claims := jwt.MapClaims{
-		"preferred_username": userID,
-		"groups":             ifaceRoles,
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString([]byte(testHMACSecret))
-	if err != nil {
-		panic(fmt.Sprintf("failed to sign test token: %v", err))
-	}
-	return signed
-}
-
-// Pre-built tokens for each role used across RBAC tests.
+// Tokens for each role used across the RBAC tests.
 var (
 	adminToken    = tokenForRole("admin-user", adminRole)
 	operatorToken = tokenForRole("operator-user", operatorRole)

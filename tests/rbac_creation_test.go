@@ -13,7 +13,7 @@ import (
 // TestCreation_RoleInitialStatus verifies that each role gets the correct
 // initial status when creating a maintenance event.
 func TestCreation_RoleInitialStatus(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 
 	t.Run("creator creates maintenance with pending_review status", func(t *testing.T) {
 		truncateIncidents(t)
@@ -40,7 +40,7 @@ func TestCreation_RoleInitialStatus(t *testing.T) {
 // TestCreation_IncidentByRoles verifies that all authorized roles can
 // create incident-type events.
 func TestCreation_IncidentByRoles(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 
 	roles := []struct {
 		name  string
@@ -63,7 +63,7 @@ func TestCreation_IncidentByRoles(t *testing.T) {
 // TestCreation_MaintenanceValidation verifies maintenance-specific
 // validation rules during creation.
 func TestCreation_MaintenanceValidation(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 
 	t.Run("missing contact_email rejected", func(t *testing.T) {
 		truncateIncidents(t)

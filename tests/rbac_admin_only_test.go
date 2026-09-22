@@ -10,7 +10,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/stackmon/otc-status-dashboard/internal/api"
-	"github.com/stackmon/otc-status-dashboard/internal/api/auth"
 	apiErrors "github.com/stackmon/otc-status-dashboard/internal/api/errors"
 	"github.com/stackmon/otc-status-dashboard/internal/api/rbac"
 	v2 "github.com/stackmon/otc-status-dashboard/internal/api/v2"
@@ -33,7 +32,7 @@ func initTestsAdminOnly(t *testing.T) *gin.Engine {
 	r.Use(api.ErrorHandle())
 
 	logger, _ := zap.NewDevelopment()
-	authn := auth.NewAuthenticator(nil, testHMACSecret)
+	authn := testIDP.provider(t, testRBACService().RoleNames()...)
 	rbacSvc := rbac.New(rbac.Config{Admins: adminRole})
 
 	v2Api := r.Group("v2")

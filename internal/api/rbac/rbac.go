@@ -18,9 +18,8 @@ const (
 	Admin    Role = 50
 )
 
-// Config holds the role names granted by the identity provider. Every field
-// accepts a comma-separated list of names; an empty field leaves the
-// corresponding application role unmapped.
+// Config maps identity provider role names to application roles. Each field
+// accepts a comma-separated list of names.
 type Config struct {
 	Creators  string
 	Operators string
@@ -95,8 +94,7 @@ func (s *Service) RoleNames() []string {
 	return names
 }
 
-// HasAuthorizedRole reports whether at least one of the role names carried by
-// the token maps to an application role.
+// HasAuthorizedRole reports whether any of the given role names maps to an application role.
 func (s *Service) HasAuthorizedRole(roleNames []string) bool {
 	for _, roleName := range roleNames {
 		if s.roleForName(normalizeRoleName(roleName)) != NoRole {

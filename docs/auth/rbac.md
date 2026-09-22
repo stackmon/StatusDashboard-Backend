@@ -156,11 +156,11 @@ Zitadel access token claims used by the API:
 
 ```json
 {
-  "sub": "289257162845356033",
-  "aud": ["390700708019568682", "289257162845356225"],
+  "sub": "100000000000000001",
+  "aud": ["123456789012345678", "234567890123456789"],
   "urn:zitadel:iam:org:project:roles": {
     "sd_creators": {
-      "390700708019568682": "eco-preprod.tsi-dev.otc-service.com"
+      "111111111111111111": "zitadel.example.com"
     }
   }
 }
@@ -173,21 +173,16 @@ Zitadel access token claims used by the API:
   same map are ignored. For example, with `SD_RBAC_ROLES_ADMINS=sd_admins,status-dashboard`, a token
   holding either role key is granted the `admin` role.
 
-## Authentication Providers
+## Authentication Provider
 
-| Provider | JWT Algorithm | Key Source | Use Case |
-|----------|-------------|------------|----------|
-| **OIDC (Zitadel)** | RS256 | Issuer discovery + JWKS | Production SSO |
-| **Local (HMAC)** | HS256 / HS384 / HS512 | `SD_SECRET_KEY` env var | Dev, tests, service-to-service (transitional) |
-
-The verifier dispatches on the token `alg` header: RS256 tokens are verified against the configured
-issuer (signature, `iss`, `aud`, `exp`), HMAC tokens against `SD_SECRET_KEY`. At least one provider
-must be configured; `conf.Validate()` fails otherwise. See
+Zitadel is the only provider. Access tokens are verified against its issuer and JWKS with `RS256`
+(signature, `iss`, `aud`, `exp`); human users authenticate through the frontend SPA, machine
+clients (for example `metrics-processor`) with a Zitadel service user and a private JWT. The
+application fails to start when OIDC is not configured. See
 [authentication.md](authentication.md) for the full pipeline.
 
 ### Security Hardening
 
-- **Minimum secret key length**: `SD_SECRET_KEY` must be ≥ 32 characters (HMAC-SHA256 requirement).
 - **No bypasses**: `SD_AUTHENTICATION_DISABLED` and `SD_RBAC_DISABLED` toggles have been removed.
 
 ### Audit Logging
@@ -205,5 +200,5 @@ All authentication events are logged in structured SIEM-ready format:
 ```
 
 Fields: `event`, `action` (`token_validation` / `authorization`), `result` (`success` / `failure` / `denied`),
-`idp_type` (`zitadel` / `local_hmac` / `unknown`), `username` (only when the configured username
+`idp_type` (`zitadel`; omitted when the token cannot be verified), `username` (only when the configured username
 claim is present), `reason` (omitted when empty).

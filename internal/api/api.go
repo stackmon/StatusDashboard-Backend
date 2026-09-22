@@ -22,7 +22,7 @@ type API struct {
 	r     *gin.Engine
 	db    *db.DB
 	log   *zap.Logger
-	authn *auth.Authenticator
+	authn *auth.Provider
 	rbac  *rbac.Service
 }
 
@@ -38,7 +38,7 @@ func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
 		Reporters: cfg.RBAC.Reporters,
 	})
 
-	authn, err := newAuthenticator(cfg, rbacService.RoleNames())
+	authn, err := newAuthProvider(cfg, rbacService.RoleNames())
 	if err != nil {
 		return nil, err
 	}
@@ -62,12 +62,7 @@ func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
 	return a, nil
 }
 
-// newAuthenticator builds the token authenticator from the configured providers.
-func newAuthenticator(cfg *conf.Config, roleNames []string) (*auth.Authenticator, error) {
-	if cfg.OIDC == nil || cfg.OIDC.Issuer == "" {
-		return auth.NewAuthenticator(nil, cfg.SecretKeyV1), nil
-	}
-
+func newAuthProvider(cfg *conf.Config, roleNames []string) (*auth.Provider, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), oidcDiscoveryTimeout)
 	defer cancel()
 
@@ -82,7 +77,7 @@ func newAuthenticator(cfg *conf.Config, roleNames []string) (*auth.Authenticator
 		return nil, fmt.Errorf("could not initialise the OIDC provider: %w", err)
 	}
 
-	return auth.NewAuthenticator(provider, cfg.SecretKeyV1), nil
+	return provider, nil
 }
 
 func (a *API) Router() *gin.Engine {

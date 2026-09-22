@@ -11,6 +11,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/coreos/go-oidc/v3/oidc/oidctest"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,7 +21,7 @@ const (
 	testKeyID         = "test-key"
 	testRolesClaim    = "urn:zitadel:iam:org:project:roles"
 	testUsernameClaim = "preferred_username"
-	testOrgID         = "390700708019568682"
+	testOrgID         = "123456789012345678"
 )
 
 // testIDP is a local OpenID Connect server publishing one RSA key.
@@ -100,9 +101,9 @@ func TestProviderVerify(t *testing.T) {
 		token := idp.token(t, func(claims map[string]any) {
 			claims[testUsernameClaim] = "alice"
 			claims[testRolesClaim] = map[string]any{
-				"sd_admins":    map[string]any{testOrgID: "zitadel.otc-service.com"},
-				"sd_creators":  map[string]any{testOrgID: "zitadel.otc-service.com"},
-				"unknown_role": map[string]any{testOrgID: "zitadel.otc-service.com"},
+				"sd_admins":    map[string]any{testOrgID: "zitadel.example.com"},
+				"sd_creators":  map[string]any{testOrgID: "zitadel.example.com"},
+				"unknown_role": map[string]any{testOrgID: "zitadel.example.com"},
 			}
 		})
 
@@ -121,7 +122,7 @@ func TestProviderVerify(t *testing.T) {
 
 		token := idp.token(t, func(claims map[string]any) {
 			claims[testRolesClaim] = map[string]any{
-				testOrgID: map[string]any{"sd_operators": "zitadel.otc-service.com"},
+				testOrgID: map[string]any{"sd_operators": "zitadel.example.com"},
 			}
 		})
 
@@ -200,6 +201,22 @@ func TestProviderVerifyRejectsBadTokens(t *testing.T) {
 			assert.ErrorIs(t, err, ErrTokenInvalid)
 		})
 	}
+
+	t.Run("unsigned token with alg none", func(t *testing.T) {
+		t.Parallel()
+
+		unsigned, err := jwt.NewWithClaims(jwt.SigningMethodNone, jwt.MapClaims{
+			"iss": idp.server.URL,
+			"aud": testClientID,
+			"sub": "user-1",
+			"exp": time.Now().Add(time.Hour).Unix(),
+		}).SignedString(jwt.UnsafeAllowNoneSignatureType)
+		require.NoError(t, err)
+
+		_, verifyErr := provider.Verify(context.Background(), unsigned)
+
+		assert.ErrorIs(t, verifyErr, ErrTokenInvalid)
+	})
 
 	t.Run("garbage token", func(t *testing.T) {
 		t.Parallel()
