@@ -297,7 +297,7 @@ func TestAuthenticationMW_NoProviderConfigured(t *testing.T) {
 
 func TestRBACAuthorizationMW(t *testing.T) {
 	logger := zaptest.NewLogger(t)
-	rbacService := rbac.New(rbac.Config{Creators: "sd_creators", Operators: "sd_operators", Admins: "sd_admins"})
+	rbacService := rbac.New(rbac.Config{Creators: "sd_creators", Operators: "sd_operators", Admins: "sd_admins", Reporters: "sd_reporters"})
 
 	tests := []struct {
 		name           string
@@ -326,6 +326,13 @@ func TestRBACAuthorizationMW(t *testing.T) {
 			setRoles:       true,
 			expectedStatus: http.StatusOK,
 			expectedRole:   rolePtr(rbac.Admin),
+		},
+		{
+			name:           "Reporter role is allowed",
+			roles:          []string{"sd_reporters"},
+			setRoles:       true,
+			expectedStatus: http.StatusOK,
+			expectedRole:   rolePtr(rbac.Reporter),
 		},
 		{
 			name:           "Role with leading slash is normalized",
@@ -403,10 +410,100 @@ func TestRBACAuthorizationMW(t *testing.T) {
 	})
 }
 
+func TestDenyReporterScopeMW(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	rbacService := rbac.New(rbac.Config{
+		Creators:  "sd_creators",
+		Operators: "sd_operators",
+		Admins:    "sd_admins",
+		Reporters: "sd_reporters",
+	})
+
+	tests := []struct {
+		name           string
+		roles          []string
+		setRoles       bool
+		expectedStatus int
+	}{
+		{
+			name:           "Reporter role is denied",
+			roles:          []string{"sd_reporters"},
+			setRoles:       true,
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			name:           "Creator role passes through",
+			roles:          []string{"sd_creators"},
+			setRoles:       true,
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "Admin role passes through",
+			roles:          []string{"sd_admins"},
+			setRoles:       true,
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "Unmapped route roles keep their previous access",
+			roles:          []string{"sd_readers"},
+			setRoles:       true,
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "Anonymous request passes through",
+			setRoles:       false,
+			expectedStatus: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := gin.New()
+			router.Use(func(c *gin.Context) {
+				if tt.setRoles {
+					c.Set(v2.UserIDContextKey, "user-1")
+					c.Set(v2.UserIDRolesContextKey, tt.roles)
+				}
+				c.Next()
+			})
+			router.Use(DenyReporterScopeMW(rbacService, logger))
+			router.POST("/test", func(c *gin.Context) {
+				c.Status(http.StatusOK)
+			})
+
+			req := httptest.NewRequest(http.MethodPost, "/test", nil)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, tt.expectedStatus, w.Code)
+		})
+	}
+
+	t.Run("Disabled reporter configuration never denies", func(t *testing.T) {
+		plainService := rbac.New(rbac.Config{Creators: "sd_creators"})
+
+		router := gin.New()
+		router.Use(func(c *gin.Context) {
+			c.Set(v2.UserIDRolesContextKey, []string{"sd_reporters"})
+			c.Next()
+		})
+		router.Use(DenyReporterScopeMW(plainService, logger))
+		router.POST("/test", func(c *gin.Context) {
+			c.Status(http.StatusOK)
+		})
+
+		req := httptest.NewRequest(http.MethodPost, "/test", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+}
+
 func TestMiddleware_ZitadelTokenAuthorizesRBAC(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	idp := newTestIDP(t)
-	rbacService := rbac.New(rbac.Config{Creators: "sd_creators", Operators: "sd_operators", Admins: "sd_admins"})
+	rbacService := rbac.New(rbac.Config{Creators: "sd_creators", Operators: "sd_operators", Admins: "sd_admins", Reporters: "sd_reporters"})
 	authn := newIDPAuthenticator(t, idp, rbacService.RoleNames()...)
 
 	tests := []struct {
@@ -425,6 +522,12 @@ func TestMiddleware_ZitadelTokenAuthorizesRBAC(t *testing.T) {
 			name:           "unknown project role is forbidden",
 			roles:          map[string]any{"sd_readers": map[string]any{testOrgID: "otc"}},
 			expectedStatus: http.StatusForbidden,
+		},
+		{
+			name:           "reporter project role resolves to Reporter",
+			roles:          map[string]any{"sd_reporters": map[string]any{testOrgID: "otc"}},
+			expectedStatus: http.StatusOK,
+			expectedRole:   rolePtr(rbac.Reporter),
 		},
 	}
 

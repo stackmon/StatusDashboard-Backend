@@ -129,6 +129,7 @@ func initTests(t *testing.T) (*gin.Engine, *db.DB) {
 	t.Setenv("SD_RBAC_ROLES_CREATORS", creatorRole)
 	t.Setenv("SD_RBAC_ROLES_OPERATORS", operatorRole)
 	t.Setenv("SD_RBAC_ROLES_ADMINS", adminRole)
+	t.Setenv("SD_RBAC_ROLES_REPORTERS", reporterRole)
 
 	cfg, err := conf.LoadConf()
 	require.NoError(t, err)
@@ -152,6 +153,7 @@ func initRoutesV1(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Authen
 	v1Api.GET("component_status", v1.GetComponentsStatusHandler(dbInst, logger))
 	v1Api.POST("component_status",
 		api.AuthenticationMW(authn, logger),
+		api.DenyReporterScopeMW(testRBACService(), logger),
 		v1.PostComponentStatusHandler(dbInst, logger))
 
 	v1Api.GET("incidents", v1.GetIncidentsHandler(dbInst, logger))
@@ -168,6 +170,7 @@ func initRoutesV2(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Authen
 	v2Api.GET("components", v2.GetComponentsHandler(dbInst, logger))
 	v2Api.POST("components",
 		api.AuthenticationMW(authn, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		v2.PostComponentHandler(dbInst, logger))
 	v2Api.GET("components/:id", v2.GetComponentHandler(dbInst, logger))
 
@@ -187,17 +190,20 @@ func initRoutesV2(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Authen
 	v2Api.PATCH("incidents/:eventID",
 		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		v2.PatchIncidentHandler(dbInst, logger))
 	v2Api.POST("incidents/:eventID/extract",
 		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		api.ValidateComponentsMW(dbInst, logger),
 		v2.PostIncidentExtractHandler(dbInst, logger))
 	v2Api.PATCH("incidents/:eventID/updates/:updateID",
 		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		v2.PatchEventUpdateTextHandler(dbInst, logger))
 
@@ -217,17 +223,20 @@ func initRoutesV2(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Authen
 	v2Api.PATCH("events/:eventID",
 		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		v2.PatchIncidentHandler(dbInst, logger))
 	v2Api.POST("events/:eventID/extract",
 		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		api.ValidateComponentsMW(dbInst, logger),
 		v2.PostIncidentExtractHandler(dbInst, logger))
 	v2Api.PATCH("events/:eventID/updates/:updateID",
 		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		v2.PatchEventUpdateTextHandler(dbInst, logger))
 

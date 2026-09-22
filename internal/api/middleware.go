@@ -189,6 +189,41 @@ func RBACAuthorizationMW(rbacService *rbac.Service, logger *zap.Logger) gin.Hand
 	}
 }
 
+// resolveCallerRole returns the highest application role granted by the role
+// names stored in the request context, or NoRole when the caller is anonymous.
+func resolveCallerRole(c *gin.Context, rbacService *rbac.Service) rbac.Role {
+	rolesVal, exists := c.Get(v2.UserIDRolesContextKey)
+	if !exists {
+		return rbac.NoRole
+	}
+
+	roles, ok := rolesVal.([]string)
+	if !ok {
+		return rbac.NoRole
+	}
+
+	return rbacService.ResolveRole(roles)
+}
+
+// DenyReporterScopeMW rejects machine reporters on human-facing write endpoints.
+// A reporter role only grants POST /v2/events for system incidents; every other
+// write route forbids it. Callers holding another role — including role names
+// this deployment does not map — keep their previous access.
+func DenyReporterScopeMW(rbacService *rbac.Service, logger *zap.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !resolveCallerRole(c, rbacService).IsReporter() {
+			c.Next()
+			return
+		}
+
+		userID, _ := c.Get(v2.UserIDContextKey)
+		userIDStr, _ := userID.(string)
+		authAudit(logger, "authorization", "denied", "", userIDStr, "reporter_scope_violation")
+
+		apiErrors.RaiseForbiddenErr(c, apiErrors.ErrInsufficientRole)
+	}
+}
+
 func CheckEventExistenceMW(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		logger.Debug("checking event existence")

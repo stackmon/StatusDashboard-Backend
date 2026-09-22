@@ -35,6 +35,7 @@ func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
 		Creators:  cfg.RBAC.Creators,
 		Operators: cfg.RBAC.Operators,
 		Admins:    cfg.RBAC.Admins,
+		Reporters: cfg.RBAC.Reporters,
 	})
 
 	authn, err := newAuthenticator(cfg, rbacService.RoleNames())

@@ -7,7 +7,7 @@ role names carried by the JWT roles claim of the access token and mapped to appl
 
 ## Roles
 
-Three application roles are supported, with highest privilege taking precedence when a user has multiple roles.
+Four application roles are supported, with highest privilege taking precedence when a user has multiple roles.
 Role names in this document refer to abstract application roles. Each role is mapped from a role name
 of the identity provider project, configured via the corresponding environment variable
 (e.g. `SD_RBAC_ROLES_ADMINS` → `admin` role).
@@ -16,13 +16,14 @@ of the identity provider project, configured via the corresponding environment v
 |------|----------|-------------|
 | `admin` | Highest | Full access to all operations; will gain additional system-level privileges in future releases |
 | `operator` | Medium | Full CRUD access to all maintenance events (event admin) |
-| `creator` | Lowest | Create and manage own maintenance events |
+| `creator` | Low | Create and manage own maintenance events |
+| `reporter` | Lowest | Machine principal: may only create system incidents, read-only everywhere else |
 
 ## Configuration
 
 RBAC is always active — there is no disable toggle. `SD_RBAC_ROLES_ADMINS` is mandatory;
-`SD_RBAC_ROLES_OPERATORS` and `SD_RBAC_ROLES_CREATORS` are optional (when omitted, no user
-can match the corresponding role).
+`SD_RBAC_ROLES_OPERATORS`, `SD_RBAC_ROLES_CREATORS` and `SD_RBAC_ROLES_REPORTERS` are optional (when
+omitted, no user can match the corresponding role).
 
 Each variable accepts either a single role name or a **comma-separated list** of role names.
 All listed role names are mapped to the same role, matched case-sensitively.
@@ -32,6 +33,7 @@ All listed role names are mapped to the same role, matched case-sensitively.
 | `SD_RBAC_ROLES_ADMINS` | **Yes** | Role name(s) that map to the `admin` role |
 | `SD_RBAC_ROLES_OPERATORS` | No | Role name(s) that map to the `operator` role |
 | `SD_RBAC_ROLES_CREATORS` | No | Role name(s) that map to the `creator` role |
+| `SD_RBAC_ROLES_REPORTERS` | No | Role name(s) that map to the `reporter` role |
 
 The pre-Zitadel `SD_RBAC_GROUPS_*` variables are still read for one release; when both the old and
 the new name are set, the new one wins and a deprecation warning is logged.
@@ -66,6 +68,19 @@ A token whose roles claim contains either `sd_admins` or `status-dashboard` is g
 - Modify **own** events only when status is `pending_review`
 - Cancel **own** events only when status is `pending_review`
 - Cannot modify events after approval (`reviewed`, `planned`, etc.)
+
+### `reporter`
+
+Machine principals (monitoring, automation) that report incidents on behalf of the system:
+
+- Create incidents with `"system": true` via `POST /v2/events` only
+- Cannot create maintenance events, information events or human-authored incidents
+- Cannot PATCH, extract or cancel anything — every other write route returns `403 Forbidden`
+- Read-only on all GET routes, with the public view: `creator`, `contact_email` and `version` are
+  hidden, and `pending_review` / `reviewed` events are not listed
+
+A reporter role name may be combined with other roles in the token; the highest privilege then wins,
+so a principal holding both a creator and a reporter role behaves as a creator.
 
 ## Maintenance Status Workflow
 
@@ -120,6 +135,9 @@ Some fields are only visible to authenticated users:
 
 Events with status `pending_review` or `reviewed` are hidden from unauthenticated users.
 
+Machine principals holding only the `reporter` role are treated as unauthenticated for reads: they
+see the same fields and the same set of events as an anonymous caller.
+
 ## Error Responses
 
 | HTTP Code | Condition |
@@ -127,6 +145,7 @@ Events with status `pending_review` or `reviewed` are hidden from unauthenticate
 | `401 Unauthorized` | Missing or invalid JWT token |
 | `403 Forbidden` | Insufficient role permissions |
 | `403 Forbidden` | Attempting to modify event you don't own (`creator` role) |
+| `403 Forbidden` | `reporter` role outside `POST /v2/events` with a system incident |
 | `409 Conflict` | Status transition not allowed for current role/state |
 | `409 Conflict` | Version mismatch (concurrent modification) |
 | `409 Conflict` | Event no longer in expected status |

@@ -161,7 +161,9 @@ func parsePaginationParams(c *gin.Context, params *db.IncidentsParams) error {
 	return nil
 }
 
-// hasExtendedView checks if the caller holds a role above NoRole (authenticated and authorized via RBAC).
+// hasExtendedView checks if the caller holds a role that grants the extended
+// view of internal event fields (creator, contact_email, version). Reporter
+// roles are machine principals and stay on the public view.
 func hasExtendedView(c *gin.Context, svc *rbac.Service) bool {
 	if svc == nil {
 		return false
@@ -177,7 +179,7 @@ func hasExtendedView(c *gin.Context, svc *rbac.Service) bool {
 		return false
 	}
 
-	return svc.HasAuthorizedRole(roles)
+	return svc.ResolveRole(roles).CanViewInternalFields()
 }
 
 func GetIncidentsHandler(dbInst *db.DB, logger *zap.Logger, svc *rbac.Service) gin.HandlerFunc {
@@ -1924,14 +1926,22 @@ func prepareIncidentCreate(c *gin.Context, logger *zap.Logger, incData *Incident
 		return false
 	}
 
+	role, ok := getRoleFromContext(c, logger)
+	if !ok {
+		return false
+	}
+
+	if role.IsReporter() && !isSystemIncident(*incData) {
+		logger.Warn("incident creation denied: reporter role may only create system incidents",
+			zap.String("type", incData.Type),
+		)
+		apiErrors.RaiseForbiddenErr(c, apiErrors.ErrInsufficientRole)
+		return false
+	}
+
 	if incData.Type == event.TypeMaintenance {
 		if err := validateMaintenanceCreation(*incData); err != nil {
 			apiErrors.RaiseBadRequestErr(c, err)
-			return false
-		}
-
-		role, ok := getRoleFromContext(c, logger)
-		if !ok {
 			return false
 		}
 
@@ -1944,6 +1954,12 @@ func prepareIncidentCreate(c *gin.Context, logger *zap.Logger, incData *Incident
 	}
 
 	return true
+}
+
+// isSystemIncident reports whether the payload is a machine-reported incident,
+// the only event shape a reporter role is allowed to create.
+func isSystemIncident(incData IncidentData) bool {
+	return incData.Type == event.TypeIncident && incData.System != nil && *incData.System
 }
 
 func prepareIncidentPatch(

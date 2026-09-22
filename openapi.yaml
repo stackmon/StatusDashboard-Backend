@@ -40,7 +40,7 @@ info:
 
     ## Role-Based Access Control (RBAC)
 
-    The API implements RBAC with three roles (highest to lowest privilege).
+    The API implements RBAC with four roles (highest to lowest privilege).
     Role names are abstract application roles mapped from the role names carried
     by the roles claim of the token via the `SD_RBAC_ROLES_*` environment variables.
 
@@ -49,11 +49,13 @@ info:
     | `admin` | Unrestricted access to all operations; will gain additional system-level privileges in future releases |
     | `operator` | Full CRUD access to all maintenance events (event admin) — unrestricted status transitions, create events (status: `planned`), cancel from any status |
     | `creator` | Create maintenance events (status: `pending_review`), modify/cancel own events in `pending_review` only |
+    | `reporter` | Machine principal — create system incidents (`"system": true`) via `POST /v2/events` only; read-only elsewhere |
 
     Roles are resolved from the roles claim, matched against:
     - `SD_RBAC_ROLES_ADMINS` (mandatory) — role name that maps to the `admin` role
     - `SD_RBAC_ROLES_OPERATORS` (optional) — role name that maps to the `operator` role
     - `SD_RBAC_ROLES_CREATORS` (optional) — role name that maps to the `creator` role
+    - `SD_RBAC_ROLES_REPORTERS` (optional) — role name that maps to the `reporter` role
 
     The deprecated `SD_RBAC_GROUPS_*` names are still read for one release and
     lose to `SD_RBAC_ROLES_*` when both are set.
@@ -63,6 +65,7 @@ info:
     ### Error Responses
     - `401 Unauthorized` - Missing or invalid JWT token
     - `403 Forbidden` - Insufficient role permissions or not event owner
+    - `403 Forbidden` - `reporter` role outside `POST /v2/events` with a system incident
 servers:
   - url: http://localhost:8000
 tags:

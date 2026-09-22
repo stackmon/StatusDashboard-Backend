@@ -8,7 +8,11 @@ import (
 type Role int
 
 const (
-	NoRole   Role = 0
+	NoRole Role = 0
+	// Reporter is reserved for machine principals (automation, monitoring).
+	// It sits below Creator on purpose: a reporter may only create system
+	// incidents, never human-authored events.
+	Reporter Role = 5
 	Creator  Role = 10
 	Operator Role = 30
 	Admin    Role = 50
@@ -21,12 +25,14 @@ type Config struct {
 	Creators  string
 	Operators string
 	Admins    string
+	Reporters string
 }
 
 type Service struct {
 	admins    map[string]struct{}
 	operators map[string]struct{}
 	creators  map[string]struct{}
+	reporters map[string]struct{}
 }
 
 func parseRoles(input string) map[string]struct{} {
@@ -46,6 +52,7 @@ func New(cfg Config) *Service {
 		creators:  parseRoles(cfg.Creators),
 		operators: parseRoles(cfg.Operators),
 		admins:    parseRoles(cfg.Admins),
+		reporters: parseRoles(cfg.Reporters),
 	}
 }
 
@@ -59,6 +66,9 @@ func (s *Service) roleForName(roleName string) Role {
 	if _, ok := s.creators[roleName]; ok {
 		return Creator
 	}
+	if _, ok := s.reporters[roleName]; ok {
+		return Reporter
+	}
 	return NoRole
 }
 
@@ -68,8 +78,8 @@ func normalizeRoleName(roleName string) string {
 
 // RoleNames returns every distinct role name known to the service, sorted.
 func (s *Service) RoleNames() []string {
-	known := []map[string]struct{}{s.creators, s.operators, s.admins}
-	set := make(map[string]struct{}, len(s.creators)+len(s.operators)+len(s.admins))
+	known := []map[string]struct{}{s.creators, s.operators, s.admins, s.reporters}
+	set := make(map[string]struct{}, len(s.creators)+len(s.operators)+len(s.admins)+len(s.reporters))
 	for _, names := range known {
 		for name := range names {
 			set[name] = struct{}{}
@@ -114,3 +124,10 @@ func (s *Service) ResolveRole(roleNames []string) Role {
 func (r Role) IsAdmin() bool    { return r >= Admin }
 func (r Role) CanApprove() bool { return r >= Operator }
 func (r Role) CanCreate() bool  { return r >= Creator }
+
+// IsReporter reports whether the role is restricted to machine reporting.
+func (r Role) IsReporter() bool { return r == Reporter }
+
+// CanViewInternalFields reports whether the role grants the extended event view
+// (caller-scoped fields such as creator, contact_email and version).
+func (r Role) CanViewInternalFields() bool { return r >= Creator }
