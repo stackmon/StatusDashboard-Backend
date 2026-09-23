@@ -310,8 +310,8 @@ func TestNewProviderDiscoveryErrors(t *testing.T) {
 			ClientID: testClientID,
 		})
 
-		assert.ErrorContains(t, err, "key set does not contain any key")
-		assert.ErrorContains(t, err, "jwks prefetch")
+		require.ErrorContains(t, err, "key set does not contain any key")
+		require.ErrorContains(t, err, "jwks prefetch")
 	})
 }
 
@@ -333,10 +333,9 @@ func TestCheckKeySetTimesOut(t *testing.T) {
 	err := checkKeySet(context.Background(), server.URL, timeout)
 	elapsed := time.Since(start)
 
-	require.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.GreaterOrEqual(t, elapsed, timeout)
 	assert.Less(t, elapsed, 5*time.Second)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestIsProjectRolesClaim(t *testing.T) {
