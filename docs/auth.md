@@ -78,10 +78,6 @@ mapped to the same application role. Names are matched case-sensitively and a le
 SD_RBAC_ROLES_ADMINS=sd_admins,status-dashboard
 ```
 
-The pre-Zitadel `SD_RBAC_GROUPS_*` variables are still read for one release: they fill a role only
-when the corresponding `SD_RBAC_ROLES_*` variable is empty, and their presence logs a deprecation
-warning. `SD_AUTHENTICATION_DISABLED` and `SD_RBAC_DISABLED` have been removed — there is no bypass.
-
 ## Roles
 
 | Role | Priority | Scope |

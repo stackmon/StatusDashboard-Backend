@@ -52,13 +52,6 @@ type RBACConfig struct {
 	// Reporters role name. Machine principals mapped here may only create
 	// system incidents via POST /v2/events.
 	Reporters string `envconfig:"ROLES_REPORTERS"`
-
-	// Deprecated: pre-Zitadel group names, read for one release to keep
-	// existing deployments running. Use the ROLES_* variables above.
-	GroupsCreators  string `envconfig:"GROUPS_CREATORS"`
-	GroupsOperators string `envconfig:"GROUPS_OPERATORS"`
-	GroupsAdmins    string `envconfig:"GROUPS_ADMINS"`
-	GroupsReporters string `envconfig:"GROUPS_REPORTERS"`
 }
 
 // OIDC configures the external identity provider (Zitadel).
@@ -95,31 +88,6 @@ func (r *RBACConfig) Validate() error {
 	return nil
 }
 
-// applyLegacyRoleNames copies the deprecated SD_RBAC_GROUPS_* values into the
-// role name fields so that deployments keeping the pre-Zitadel variables keep
-// working. Explicit SD_RBAC_ROLES_* values always win.
-func (r *RBACConfig) applyLegacyRoleNames() {
-	if r.Creators == "" {
-		r.Creators = r.GroupsCreators
-	}
-
-	if r.Operators == "" {
-		r.Operators = r.GroupsOperators
-	}
-
-	if r.Admins == "" {
-		r.Admins = r.GroupsAdmins
-	}
-
-	if r.Reporters == "" {
-		r.Reporters = r.GroupsReporters
-	}
-}
-
-func (r *RBACConfig) legacyRoleNamesUsed() bool {
-	return r.GroupsCreators != "" || r.GroupsOperators != "" || r.GroupsAdmins != "" || r.GroupsReporters != ""
-}
-
 func (c *Config) FillDefaults() {
 	if c.LogLevel == "" {
 		c.LogLevel = DevelopMode
@@ -128,8 +96,6 @@ func (c *Config) FillDefaults() {
 	if c.Port == "" {
 		c.Port = DefaultPort
 	}
-
-	c.RBAC.applyLegacyRoleNames()
 
 	if c.OpenAPISpecPath == "" {
 		c.OpenAPISpecPath = DefaultOpenAPISpecPath
@@ -252,6 +218,7 @@ func (c *Config) Log(logger *zap.Logger) {
 		zap.String("creators_role", c.RBAC.Creators),
 		zap.String("operators_role", c.RBAC.Operators),
 		zap.String("admins_role", c.RBAC.Admins),
+		zap.String("reporters_role", c.RBAC.Reporters),
 	)
 
 	logger.Info("Storage and logging configuration",
@@ -260,9 +227,4 @@ func (c *Config) Log(logger *zap.Logger) {
 		zap.String("log_level", c.LogLevel),
 		zap.String("openapi_spec_path", c.OpenAPISpecPath),
 	)
-
-	if c.RBAC.legacyRoleNamesUsed() {
-		logger.Warn("SD_RBAC_GROUPS_* variables are deprecated, use SD_RBAC_ROLES_* instead",
-			zap.String("deprecated_admins", c.RBAC.GroupsAdmins))
-	}
 }
