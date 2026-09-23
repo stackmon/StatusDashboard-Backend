@@ -95,4 +95,7 @@ jobs:
         context: .
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
+        # SWR rejects the OCI image index and attestation manifests that BuildKit adds by default.
+        provenance: false
+        sbom: false
         push: true
