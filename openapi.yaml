@@ -55,9 +55,6 @@ info:
     - `SD_RBAC_ROLES_CREATORS` (optional) — role name that maps to the `creator` role
     - `SD_RBAC_ROLES_REPORTERS` (optional) — role name that maps to the `reporter` role
 
-    The deprecated `SD_RBAC_GROUPS_*` names are still read for one release and
-    lose to `SD_RBAC_ROLES_*` when both are set.
-
     RBAC is always active — there is no disable toggle.
 
     ### Error Responses

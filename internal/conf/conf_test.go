@@ -5,7 +5,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestRBACConfig_Validate(t *testing.T) {
@@ -196,38 +198,15 @@ func TestFillDefaults(t *testing.T) {
 			LogLevel:        "info",
 			Port:            "9090",
 			OpenAPISpecPath: "custom.yaml",
+			RBAC:            RBACConfig{Creators: "sd_creators", Admins: "sd_admins"},
 		}
 		c.FillDefaults()
 
 		assert.Equal(t, "info", c.LogLevel)
 		assert.Equal(t, "9090", c.Port)
 		assert.Equal(t, "custom.yaml", c.OpenAPISpecPath)
-	})
-
-	t.Run("legacy group variables fill the role names", func(t *testing.T) {
-		c := &Config{RBAC: RBACConfig{
-			GroupsCreators:  "legacy_creators",
-			GroupsOperators: "legacy_operators",
-			GroupsAdmins:    "legacy_admins",
-		}}
-		c.FillDefaults()
-
-		assert.Equal(t, "legacy_creators", c.RBAC.Creators)
-		assert.Equal(t, "legacy_operators", c.RBAC.Operators)
-		assert.Equal(t, "legacy_admins", c.RBAC.Admins)
-		assert.True(t, c.RBAC.legacyRoleNamesUsed())
-	})
-
-	t.Run("role names win over legacy group variables", func(t *testing.T) {
-		c := &Config{RBAC: RBACConfig{
-			Creators:       "sd_creators",
-			GroupsCreators: "legacy_creators",
-			GroupsAdmins:   "legacy_admins",
-		}}
-		c.FillDefaults()
-
 		assert.Equal(t, "sd_creators", c.RBAC.Creators)
-		assert.Equal(t, "legacy_admins", c.RBAC.Admins)
+		assert.Equal(t, "sd_admins", c.RBAC.Admins)
 	})
 }
 
@@ -305,13 +284,13 @@ func TestMergeConfigs(t *testing.T) {
 	t.Run("merges into embedded struct (RBACConfig)", func(t *testing.T) {
 		c := &Config{}
 		env := map[string]string{
-			"SD_RBAC_ROLES_ADMINS":    "my-admins",
-			"SD_RBAC_GROUPS_CREATORS": "legacy-creators",
+			"SD_RBAC_ROLES_ADMINS":   "my-admins",
+			"SD_RBAC_ROLES_CREATORS": "my-creators",
 		}
 		err := mergeConfigs(env, c, "SD")
 		require.NoError(t, err)
 		assert.Equal(t, "my-admins", c.RBAC.Admins)
-		assert.Equal(t, "legacy-creators", c.RBAC.GroupsCreators)
+		assert.Equal(t, "my-creators", c.RBAC.Creators)
 	})
 
 	t.Run("merges into embedded struct (OIDC)", func(t *testing.T) {
@@ -328,9 +307,9 @@ func TestMergeConfigs(t *testing.T) {
 }
 
 func TestConfig_Log(t *testing.T) {
-	logger := zaptest.NewLogger(t)
-
 	t.Run("logs the OIDC and RBAC configuration", func(t *testing.T) {
+		logger := zaptest.NewLogger(t)
+
 		c := &Config{
 			Port:     "8000",
 			DB:       "postgresql://localhost:5432/db",
@@ -345,12 +324,28 @@ func TestConfig_Log(t *testing.T) {
 		assert.NotPanics(t, func() { c.Log(logger) })
 	})
 
-	t.Run("logs the deprecated group variables", func(t *testing.T) {
+	t.Run("logs every configured role name", func(t *testing.T) {
+		core, logs := observer.New(zap.InfoLevel)
+
 		c := &Config{
 			Port:     "8000",
 			LogLevel: "devel",
-			RBAC:     RBACConfig{GroupsAdmins: "legacy-admins"},
+			RBAC: RBACConfig{
+				Creators:  "sd_creators",
+				Operators: "sd_operators",
+				Admins:    "sd_admins",
+				Reporters: "sd_reporters",
+			},
 		}
-		assert.NotPanics(t, func() { c.Log(logger) })
+		c.Log(zap.New(core))
+
+		entries := logs.FilterMessage("Authentication configuration").All()
+		require.Len(t, entries, 1)
+
+		fields := entries[0].ContextMap()
+		assert.Equal(t, "sd_creators", fields["creators_role"])
+		assert.Equal(t, "sd_operators", fields["operators_role"])
+		assert.Equal(t, "sd_admins", fields["admins_role"])
+		assert.Equal(t, "sd_reporters", fields["reporters_role"])
 	})
 }

@@ -39,8 +39,7 @@ is missing or invalid.
 | `SD_RBAC_ROLES_CREATORS` | – | role name(s) mapped to `creator` |
 | `SD_RBAC_ROLES_REPORTERS` | – | role name(s) mapped to `reporter` (machine principals) |
 
-Each `SD_RBAC_ROLES_*` variable accepts a comma-separated list of names. The deprecated
-`SD_RBAC_GROUPS_*` variables are still read for one release. See [docs/auth.md](docs/auth.md).
+Each `SD_RBAC_ROLES_*` variable accepts a comma-separated list of names. See [docs/auth.md](docs/auth.md).
 
 ## API
 
