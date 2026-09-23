@@ -85,7 +85,6 @@ func newIDPProvider(t *testing.T, idp *testIDP, roleNames ...string) *auth.Provi
 	provider, err := auth.NewProvider(context.Background(), auth.ProviderConfig{
 		Issuer:        idp.server.URL,
 		ClientID:      testClientID,
-		RolesClaim:    testRolesClaim,
 		RoleNames:     roleNames,
 		UsernameClaim: testUsernameClaim,
 	})

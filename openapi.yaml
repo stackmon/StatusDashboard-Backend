@@ -12,8 +12,9 @@ info:
 
     - **Issuer**: `SD_OIDC_ISSUER` — must expose `/.well-known/openid-configuration`
     - **Audience**: `SD_OIDC_CLIENT_ID` — every accepted token must be issued to this client
-    - **Roles**: the claim named by `SD_OIDC_ROLES_CLAIM` (default
-      `urn:zitadel:iam:org:project:roles`)
+    - **Roles**: the Zitadel roles claims — the generic
+      `urn:zitadel:iam:org:project:roles` claim, the legacy `groups` claim a service
+      identity carries and any project scoped roles claim the token carries
 
     Machine clients such as the metrics processor authenticate with a Zitadel
     service user and a private JWT. Only `RS256` tokens are accepted. Clients

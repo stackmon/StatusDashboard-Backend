@@ -60,7 +60,6 @@ func (idp *localIDP) provider(t *testing.T, roleNames ...string) *auth.Provider 
 	provider, err := auth.NewProvider(context.Background(), auth.ProviderConfig{
 		Issuer:        idp.server.URL,
 		ClientID:      testClientID,
-		RolesClaim:    testRolesClaim,
 		RoleNames:     roleNames,
 		UsernameClaim: testUsernameClaim,
 	})
