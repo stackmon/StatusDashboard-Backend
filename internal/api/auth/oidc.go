@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 )
@@ -27,6 +28,9 @@ const (
 	// urn:zitadel:iam:org:project:<projectID>:roles.
 	projectRolesClaimPrefix = "urn:zitadel:iam:org:project:"
 	projectRolesClaimSuffix = ":roles"
+	// jwksPrefetchTimeout bounds the JWKS prefetch so that an identity provider
+	// accepting connections without answering cannot block startup forever.
+	jwksPrefetchTimeout = 10 * time.Second
 )
 
 // ProviderConfig describes the identity provider that issues access tokens.
@@ -61,8 +65,8 @@ func NewProvider(ctx context.Context, cfg ProviderConfig) (*Provider, error) {
 		return nil, err
 	}
 
-	if err = checkKeySet(ctx, jwksURL); err != nil {
-		return nil, fmt.Errorf("oidc key set at %s: %w", jwksURL, err)
+	if err = checkKeySet(ctx, jwksURL, jwksPrefetchTimeout); err != nil {
+		return nil, fmt.Errorf("oidc jwks prefetch of %s: %w", jwksURL, err)
 	}
 
 	return &Provider{
@@ -115,8 +119,12 @@ func jwksURI(provider *oidc.Provider, issuer string) (string, error) {
 
 // checkKeySet prefetches the JWKS so that an unreachable or empty key set is
 // reported at startup. The verifier caches keys by kid afterwards and refetches
-// them on rotation.
-func checkKeySet(ctx context.Context, jwksURL string) error {
+// them on rotation. The request is bounded by timeout and, like any other
+// failure, keeps the caller from starting.
+func checkKeySet(ctx context.Context, jwksURL string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
 	if err != nil {
 		return err

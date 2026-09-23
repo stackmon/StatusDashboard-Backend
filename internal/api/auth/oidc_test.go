@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -310,7 +311,32 @@ func TestNewProviderDiscoveryErrors(t *testing.T) {
 		})
 
 		assert.ErrorContains(t, err, "key set does not contain any key")
+		assert.ErrorContains(t, err, "jwks prefetch")
 	})
+}
+
+func TestCheckKeySetTimesOut(t *testing.T) {
+	t.Parallel()
+
+	stalled := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		<-stalled
+	}))
+	t.Cleanup(func() {
+		close(stalled)
+		server.Close()
+	})
+
+	const timeout = 100 * time.Millisecond
+
+	start := time.Now()
+	err := checkKeySet(context.Background(), server.URL, timeout)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.GreaterOrEqual(t, elapsed, timeout)
+	assert.Less(t, elapsed, 5*time.Second)
 }
 
 func TestIsProjectRolesClaim(t *testing.T) {
