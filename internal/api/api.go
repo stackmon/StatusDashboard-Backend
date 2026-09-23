@@ -69,7 +69,6 @@ func newAuthProvider(cfg *conf.Config, roleNames []string) (*auth.Provider, erro
 	provider, err := auth.NewProvider(ctx, auth.ProviderConfig{
 		Issuer:        cfg.OIDC.Issuer,
 		ClientID:      cfg.OIDC.ClientID,
-		RolesClaim:    cfg.OIDC.RolesClaim,
 		RoleNames:     roleNames,
 		UsernameClaim: cfg.OIDC.UsernameClaim,
 	})

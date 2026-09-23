@@ -36,8 +36,10 @@ sequenceDiagram
 2. **OIDC** (`coreos/go-oidc`) — the discovery document and JWKS are fetched at startup and refreshed
    when an unknown `kid` appears, then signature, `iss`, `aud` and `exp` are checked.
 3. **Subject** — a token without `sub` is rejected; `sub` is the user identity (not an e-mail).
-4. **Roles** — role names are taken from the claim named by `SD_OIDC_ROLES_CLAIM`; only names
-   configured through `SD_RBAC_ROLES_*` are considered.
+4. **Roles** — role names are read from the Zitadel roles claims: the generic
+   `urn:zitadel:iam:org:project:roles` claim, the legacy `groups` claim a service identity
+   carries and any project scoped roles claim; only names configured through `SD_RBAC_ROLES_*`
+   are considered.
 5. **Audit logging** — every outcome is logged as `auth_audit` with `action`, `result`, `idp_type`,
    `username` and `reason`, in a SIEM-friendly structure.
 
@@ -62,7 +64,6 @@ OIDC is mandatory — the application fails to start when it is missing or incon
 | --- | --- | --- | --- |
 | `SD_OIDC_ISSUER` | yes | – | validated together with `SD_OIDC_CLIENT_ID`; the discovered issuer must match exactly |
 | `SD_OIDC_CLIENT_ID` | yes | – | the audience accepted in `aud` |
-| `SD_OIDC_ROLES_CLAIM` | no | `urn:zitadel:iam:org:project:roles` | |
 | `SD_OIDC_USERNAME_CLAIM` | no | – | display name only, never used for identity |
 | `SD_RBAC_ROLES_ADMINS` | yes | – | |
 | `SD_RBAC_ROLES_OPERATORS` | no | – | |

@@ -33,7 +33,6 @@ is missing or invalid.
 | `SD_OPENAPI_SPEC_PATH` | `openapi.yaml` | path of the spec served at `/openapi.json` |
 | `SD_OIDC_ISSUER` | – | **required**, must match the discovered issuer exactly |
 | `SD_OIDC_CLIENT_ID` | – | **required**, the audience accepted in `aud` |
-| `SD_OIDC_ROLES_CLAIM` | `urn:zitadel:iam:org:project:roles` | claim carrying the role names |
 | `SD_OIDC_USERNAME_CLAIM` | – | display name only, never used as identity |
 | `SD_RBAC_ROLES_ADMINS` | – | **required**, role name(s) mapped to `admin` |
 | `SD_RBAC_ROLES_OPERATORS` | – | role name(s) mapped to `operator` |

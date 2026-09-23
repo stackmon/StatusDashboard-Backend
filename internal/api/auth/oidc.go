@@ -16,17 +16,24 @@ import (
 // unexpected issuer or audience, expired, or missing mandatory claims.
 var ErrTokenInvalid = errors.New("token is invalid")
 
-// maxRolesClaimDepth limits the recursion into the roles claim. Zitadel nests
-// role names at most two levels deep.
-const maxRolesClaimDepth = 3
+const (
+	// maxRolesClaimDepth limits the recursion into a roles claim.
+	maxRolesClaimDepth = 3
+	// userRolesClaim is the claim Zitadel asserts project roles in for a user token, groupsClaim is
+	// the legacy Keycloak claim a service identity token carries.
+	userRolesClaim = "urn:zitadel:iam:org:project:roles"
+	groupsClaim    = "groups"
+	// projectRolesClaimPrefix and projectRolesClaimSuffix delimit the project scoped roles claim
+	// urn:zitadel:iam:org:project:<projectID>:roles.
+	projectRolesClaimPrefix = "urn:zitadel:iam:org:project:"
+	projectRolesClaimSuffix = ":roles"
+)
 
 // ProviderConfig describes the identity provider that issues access tokens.
 type ProviderConfig struct {
 	Issuer string
 	// ClientID is the audience every accepted token must be issued to.
 	ClientID string
-	// RolesClaim is the claim carrying the project roles; empty disables role extraction.
-	RolesClaim string
 	// RoleNames are the role names the resource server knows, all other names in the claim are ignored.
 	RoleNames []string
 	// UsernameClaim is an optional display name for audit logging, never the identity.
@@ -36,7 +43,6 @@ type ProviderConfig struct {
 // Provider verifies tokens issued by Zitadel and extracts identity and project roles.
 type Provider struct {
 	verifier      *oidc.IDTokenVerifier
-	rolesClaim    string
 	roleNames     map[string]struct{}
 	usernameClaim string
 }
@@ -61,7 +67,6 @@ func NewProvider(ctx context.Context, cfg ProviderConfig) (*Provider, error) {
 
 	return &Provider{
 		verifier:      oidcProvider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
-		rolesClaim:    cfg.RolesClaim,
 		roleNames:     roleNameSet(cfg.RoleNames),
 		usernameClaim: cfg.UsernameClaim,
 	}, nil
@@ -87,7 +92,7 @@ func (p *Provider) Verify(ctx context.Context, rawToken string) (*Claims, error)
 	return &Claims{
 		Subject:  token.Subject,
 		Username: stringClaim(payload, p.usernameClaim),
-		Roles:    extractRoleNames(payload[p.rolesClaim], p.roleNames),
+		Roles:    extractRolesFromClaims(payload, p.roleNames),
 		Provider: ProviderZitadel,
 	}, nil
 }
@@ -151,17 +156,37 @@ func stringClaim(payload map[string]any, claim string) string {
 	return value
 }
 
-// extractRoleNames collects the known role names from the roles claim. Zitadel
-// nests them as {role: {orgID: orgName}} or {orgID: {role: orgName}}, so keys and
-// string values are both matched against the known names.
-func extractRoleNames(value any, known map[string]struct{}) []string {
-	if value == nil || len(known) == 0 {
+func isProjectRolesClaim(name string) bool {
+	if !strings.HasPrefix(name, projectRolesClaimPrefix) || !strings.HasSuffix(name, projectRolesClaimSuffix) {
+		return false
+	}
+
+	return len(name) > len(projectRolesClaimPrefix)+len(projectRolesClaimSuffix)
+}
+
+// extractRolesFromClaims collects the known role names from the Zitadel roles claims, including any
+// project scoped claim the token carries. Role names appear as keys or as values, hence both are matched.
+func extractRolesFromClaims(payload map[string]any, known map[string]struct{}) []string {
+	if len(known) == 0 {
 		return []string{}
 	}
 
 	found := make(map[string]struct{})
-	collectRoleNames(value, known, found, 0)
 
+	for _, claim := range []string{userRolesClaim, groupsClaim} {
+		collectRoleNames(payload[claim], known, found, 0)
+	}
+
+	for name, value := range payload {
+		if isProjectRolesClaim(name) {
+			collectRoleNames(value, known, found, 0)
+		}
+	}
+
+	return sortedRoleNames(found)
+}
+
+func sortedRoleNames(found map[string]struct{}) []string {
 	roles := make([]string, 0, len(found))
 	for name := range found {
 		roles = append(roles, name)

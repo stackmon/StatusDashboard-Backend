@@ -204,20 +204,6 @@ func TestFillDefaults(t *testing.T) {
 		assert.Equal(t, "custom.yaml", c.OpenAPISpecPath)
 	})
 
-	t.Run("defaults the roles claim", func(t *testing.T) {
-		c := &Config{}
-		c.FillDefaults()
-
-		assert.Equal(t, DefaultRolesClaim, c.OIDC.RolesClaim)
-	})
-
-	t.Run("keeps a custom roles claim", func(t *testing.T) {
-		c := &Config{OIDC: OIDC{RolesClaim: "roles"}}
-		c.FillDefaults()
-
-		assert.Equal(t, "roles", c.OIDC.RolesClaim)
-	})
-
 	t.Run("legacy group variables fill the role names", func(t *testing.T) {
 		c := &Config{RBAC: RBACConfig{
 			GroupsCreators:  "legacy_creators",
@@ -353,7 +339,6 @@ func TestConfig_Log(t *testing.T) {
 			OIDC: OIDC{
 				Issuer:        "https://zitadel.example.com",
 				ClientID:      "status-dashboard",
-				RolesClaim:    DefaultRolesClaim,
 				UsernameClaim: "preferred_username",
 			},
 		}

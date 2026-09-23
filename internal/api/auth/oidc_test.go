@@ -17,11 +17,13 @@ import (
 )
 
 const (
-	testClientID      = "status-dashboard"
-	testKeyID         = "test-key"
-	testRolesClaim    = "urn:zitadel:iam:org:project:roles"
-	testUsernameClaim = "preferred_username"
-	testOrgID         = "123456789012345678"
+	testClientID          = "status-dashboard"
+	testKeyID             = "test-key"
+	testRolesClaim        = "urn:zitadel:iam:org:project:roles"
+	testUsernameClaim     = "preferred_username"
+	testOrgID             = "123456789012345678"
+	testGroupsClaim       = "groups"
+	testProjectRolesClaim = "urn:zitadel:iam:org:project:" + testOrgID + ":roles"
 )
 
 // testIDP is a local OpenID Connect server publishing one RSA key.
@@ -80,7 +82,6 @@ func newTestProvider(t *testing.T, idp *testIDP, roleNames ...string) *Provider 
 	provider, err := NewProvider(context.Background(), ProviderConfig{
 		Issuer:        idp.server.URL,
 		ClientID:      testClientID,
-		RolesClaim:    testRolesClaim,
 		RoleNames:     roleNames,
 		UsernameClaim: testUsernameClaim,
 	})
@@ -143,6 +144,49 @@ func TestProviderVerify(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, []string{"sd_admins", "sd_creators"}, claims.Roles)
+	})
+
+	t.Run("legacy groups claim of a service identity", func(t *testing.T) {
+		t.Parallel()
+
+		token := idp.token(t, func(claims map[string]any) {
+			claims[testGroupsClaim] = []any{"sd_admins", "unknown_role"}
+		})
+
+		claims, err := provider.Verify(context.Background(), token)
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"sd_admins"}, claims.Roles)
+	})
+
+	t.Run("project scoped roles claim", func(t *testing.T) {
+		t.Parallel()
+
+		token := idp.token(t, func(claims map[string]any) {
+			claims[testProjectRolesClaim] = map[string]any{
+				"sd_creators": map[string]any{testOrgID: "zitadel.example.com"},
+			}
+		})
+
+		claims, err := provider.Verify(context.Background(), token)
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"sd_creators"}, claims.Roles)
+	})
+
+	t.Run("roles of several claims are unioned", func(t *testing.T) {
+		t.Parallel()
+
+		token := idp.token(t, func(claims map[string]any) {
+			claims[testRolesClaim] = []any{"sd_admins"}
+			claims[testGroupsClaim] = []any{"sd_creators", "sd_admins"}
+			claims[testProjectRolesClaim] = []any{"sd_operators"}
+		})
+
+		claims, err := provider.Verify(context.Background(), token)
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"sd_admins", "sd_creators", "sd_operators"}, claims.Roles)
 	})
 
 	t.Run("no roles claim", func(t *testing.T) {
@@ -269,10 +313,26 @@ func TestNewProviderDiscoveryErrors(t *testing.T) {
 	})
 }
 
-func TestExtractRoleNames(t *testing.T) {
+func TestIsProjectRolesClaim(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, isProjectRolesClaim(testProjectRolesClaim))
+	assert.False(t, isProjectRolesClaim(testRolesClaim))
+	assert.False(t, isProjectRolesClaim(testGroupsClaim))
+	assert.False(t, isProjectRolesClaim("urn:zitadel:iam:org:project:"+testOrgID+":roles_extra"))
+}
+
+func TestExtractRolesFromClaims(t *testing.T) {
 	t.Parallel()
 
 	known := roleNameSet([]string{"sd_creators", "sd_operators", "sd_admins"})
+	payload := map[string]any{
+		testGroupsClaim:       []any{"sd_creators"},
+		testProjectRolesClaim: map[string]any{"sd_admins": map[string]any{testOrgID: "otc"}},
+	}
+
+	assert.Equal(t, []string{"sd_admins", "sd_creators"}, extractRolesFromClaims(payload, known))
+	assert.Empty(t, extractRolesFromClaims(payload, roleNameSet(nil)))
 
 	testCases := []struct {
 		name     string
@@ -332,15 +392,11 @@ func TestExtractRoleNames(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			assert.Equal(t, testCase.expected, extractRoleNames(testCase.value, known))
+			claim := map[string]any{testGroupsClaim: testCase.value}
+
+			assert.Equal(t, testCase.expected, extractRolesFromClaims(claim, known))
 		})
 	}
-
-	t.Run("no known role names", func(t *testing.T) {
-		t.Parallel()
-
-		assert.Empty(t, extractRoleNames(map[string]any{"sd_admins": "x"}, roleNameSet(nil)))
-	})
 }
 
 func TestRoleNameSet(t *testing.T) {

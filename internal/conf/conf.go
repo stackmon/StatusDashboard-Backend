@@ -19,10 +19,6 @@ const DevelopMode = "devel"
 const (
 	DefaultPort            = "8000"
 	DefaultOpenAPISpecPath = "openapi.yaml"
-
-	// DefaultRolesClaim is the Zitadel claim carrying the project roles of the
-	// authenticated subject.
-	DefaultRolesClaim = "urn:zitadel:iam:org:project:roles"
 )
 
 type Config struct {
@@ -69,7 +65,6 @@ type RBACConfig struct {
 type OIDC struct {
 	Issuer        string `envconfig:"ISSUER"`
 	ClientID      string `envconfig:"CLIENT_ID"`
-	RolesClaim    string `envconfig:"ROLES_CLAIM"`
 	UsernameClaim string `envconfig:"USERNAME_CLAIM"`
 }
 
@@ -135,10 +130,6 @@ func (c *Config) FillDefaults() {
 	}
 
 	c.RBAC.applyLegacyRoleNames()
-
-	if c.OIDC.RolesClaim == "" {
-		c.OIDC.RolesClaim = DefaultRolesClaim
-	}
 
 	if c.OpenAPISpecPath == "" {
 		c.OpenAPISpecPath = DefaultOpenAPISpecPath
@@ -257,7 +248,6 @@ func (c *Config) Log(logger *zap.Logger) {
 	logger.Info("Authentication configuration",
 		zap.String("issuer", c.OIDC.Issuer),
 		zap.String("client_id", c.OIDC.ClientID),
-		zap.String("roles_claim", c.OIDC.RolesClaim),
 		zap.String("username_claim", c.OIDC.UsernameClaim),
 		zap.String("creators_role", c.RBAC.Creators),
 		zap.String("operators_role", c.RBAC.Operators),
