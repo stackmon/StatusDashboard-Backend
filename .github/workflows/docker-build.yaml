@@ -2,21 +2,27 @@ name: Docker Image Build
 
 on:
   pull_request:
-    types:
-      - opened
-      - closed
-      - edited
-      - reopened
-      - synchronize
+  push:
+    branches:
+      - main
+  release:
+    types: [published]
+  workflow_dispatch:
 
 env:
+  REGISTRY: swr.eu-de.otc.t-systems.com
   ORG: stackmon
-  PROJECT: status-dashboard-v3
+  PROJECT: status-dashboard-backend
+  # OTC project of the region, listed under "My Credentials > API Credentials" in the OTC console.
+  SWR_PROJECT: eu-de
+
+permissions:
+  contents: read
 
 jobs:
 
   build:
-    if: github.event.pull_request.merged == false
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
 
     steps:
@@ -27,20 +33,14 @@ jobs:
       uses: docker/metadata-action@v5
       with:
         images: |
-          "${{ secrets.REGISTRY }}/${{ env.ORG }}/${{ env.PROJECT }}"
+          ${{ env.REGISTRY }}/${{ env.ORG }}/${{ env.PROJECT }}
         tags: |
-          type=schedule
-          type=ref,event=branch
           type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=semver,pattern={{major}}
-          type=sha
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Build and push
+    - name: Build
       uses: docker/build-push-action@v7
       with:
         context: .
@@ -48,42 +48,51 @@ jobs:
         labels: ${{ steps.meta.outputs.labels }}
         push: false
 
-  push_if_merged:
-    if: github.event.pull_request.merged == true
+  publish:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
-    
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            "${{ secrets.REGISTRY }}/${{ env.ORG }}/${{ env.PROJECT }}"
-          tags: |
-            type=schedule
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha
+    - uses: actions/checkout@v7
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+    - name: Docker meta
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: |
+          ${{ env.REGISTRY }}/${{ env.ORG }}/${{ env.PROJECT }}
+        tags: |
+          type=sha,enable=${{ github.event_name != 'release' }}
+          type=semver,pattern=v{{version}},enable=${{ github.event_name == 'release' }}
 
-      - name: Login to Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ secrets.REGISTRY }}
-          username: ${{ secrets.REGISTRY_USER }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
 
-      - name: Build and push
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          push: true
+    - name: Login to Container Registry
+      env:
+        SWR_AK: ${{ secrets.SWR_AK }}
+        SWR_SK: ${{ secrets.SWR_SK }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "$SWR_AK" ] || [ -z "$SWR_SK" ]; then
+          echo "The SWR_AK and SWR_SK repository secrets must be set" >&2
+          exit 1
+        fi
+
+        # SWR authenticates with "<project>@<AK>" and a login key derived from the AK/SK pair.
+        login_key="$(printf '%s' "$SWR_AK" | openssl dgst -sha256 -hmac "$SWR_SK" | awk '{print $NF}')"
+        if [[ ! "$login_key" =~ ^[0-9a-f]{64}$ ]]; then
+          echo "Cannot derive the SWR login key from the AK/SK pair" >&2
+          exit 1
+        fi
+
+        printf '%s' "$login_key" | docker login "$REGISTRY" --username "${SWR_PROJECT}@${SWR_AK}" --password-stdin
+
+    - name: Build and push
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        push: true
