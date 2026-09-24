@@ -9,10 +9,10 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/stackmon/otc-status-dashboard/internal/api/auth"
-	"github.com/stackmon/otc-status-dashboard/internal/api/errors"
 	"github.com/stackmon/otc-status-dashboard/internal/api/rbac"
 	"github.com/stackmon/otc-status-dashboard/internal/conf"
 	"github.com/stackmon/otc-status-dashboard/internal/db"
+	"github.com/stackmon/otc-status-dashboard/internal/static"
 )
 
 // oidcDiscoveryTimeout bounds the provider discovery and JWKS check at startup.
@@ -47,7 +47,13 @@ func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
 	r.Use(Logger(log), gin.Recovery())
 	r.Use(ErrorHandle())
 	r.Use(CORSMiddleware())
-	r.NoRoute(errors.Return404)
+
+	catchAll, err := static.NewHandler(cfg.Static, log)
+	if err != nil {
+		return nil, fmt.Errorf("init static site proxy: %w", err)
+	}
+
+	r.NoRoute(catchAll)
 
 	a := &API{
 		r:     r,

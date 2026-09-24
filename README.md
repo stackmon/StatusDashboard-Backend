@@ -38,6 +38,9 @@ is missing or invalid.
 | `SD_RBAC_ROLES_OPERATORS` | – | role name(s) mapped to `operator` |
 | `SD_RBAC_ROLES_CREATORS` | – | role name(s) mapped to `creator` |
 | `SD_RBAC_ROLES_REPORTERS` | – | role name(s) mapped to `reporter` (machine principals) |
+| `SD_STATIC_ORIGINS` | – | OBS website endpoints serving the static site, primary first, host only |
+| `SD_STATIC_CACHE_TTL` | `5m` | lifetime of a cached response that carries no `Cache-Control` |
+| `SD_STATIC_CACHE_MAX_BYTES` | `67108864` | byte budget of the whole response cache |
 
 Each `SD_RBAC_ROLES_*` variable accepts a comma-separated list of names. See [docs/auth.md](docs/auth.md).
 
@@ -56,6 +59,26 @@ Each `SD_RBAC_ROLES_*` variable accepts a comma-separated list of names. See [do
 Business rules the specification cannot express — validation, status lifecycles, automatic
 transitions — are documented in [docs/events.md](docs/events.md).
 
+## Static site
+
+With `SD_STATIC_ORIGINS` set, every path the API does not own is proxied to the OBS website
+endpoints over HTTPS, with the origin hostname in `Host` because OBS selects the bucket from that
+header and ignores SNI. Origins are tried in order: a connect failure, a timeout or a `502`/`504`
+falls through to the next one. `GET` and `HEAD` are proxied, any other method keeps the API's 404,
+and an empty origin list leaves the router exactly as it was without this feature.
+
+Responses are cached in memory per method, host, path and query:
+
+- `GET` only — never `HEAD`, never an API route.
+- TTL from `max-age`/`s-maxage`, `SD_STATIC_CACHE_TTL` when the origin sends neither; responses
+  marked `no-store` or `no-cache` and responses that are not `200` are not stored.
+- A single object is buffered up to 8 MiB, the whole cache is bounded by `SD_STATIC_CACHE_MAX_BYTES`
+  and evicted least-recently-used first.
+- Concurrent requests for the same missing entry share one origin fetch, and an expired entry is
+  served when every origin is unreachable.
+
+`X-Cache` reports the outcome: `HIT`, `MISS`, `STALE` or `BYPASS`.
+
 ## Development
 
 ```shell
@@ -67,9 +90,9 @@ make migrate-create name=add_xyz
 ```
 
 Layout: `cmd/` entry point, `internal/api` HTTP layer (middleware, routes, `v2`, `rbac`,
-`auth`), `internal/db` persistence, `internal/checker` background status transitions,
-`internal/event` domain types, `db/migrations` schema, `tests/` integration suite,
-`openapi.yaml` contract.
+`auth`), `internal/static` OBS proxy and response cache, `internal/db` persistence,
+`internal/checker` background status transitions, `internal/event` domain types,
+`db/migrations` schema, `tests/` integration suite, `openapi.yaml` contract.
 
 ## Documentation
 
