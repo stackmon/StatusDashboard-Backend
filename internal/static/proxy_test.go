@@ -363,6 +363,30 @@ func TestProxyHeadIsNotCached(t *testing.T) {
 	assert.Zero(t, proxy.Cache().Len())
 }
 
+// Streaming skips the cache buffer, but it must not skip the header filtering
+// the buffered path applies: the origin's own metadata stays between the proxy
+// and OBS.
+func TestProxyStreamedResponseHidesOriginHeaders(t *testing.T) {
+	origin := newFakeOrigin(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("Cache-Control", "max-age=60")
+		w.Header().Set("X-Amz-Request-Id", "REQ123")
+		w.Header().Set("Server", "obs")
+		w.WriteHeader(http.StatusOK)
+	})
+
+	router, _ := newTestRouter(t, origin)
+
+	w := request(t, router, http.MethodHead, "/index.html")
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, cacheBypass, w.Header().Get(cacheHeader))
+	assert.Equal(t, "text/html", w.Header().Get("Content-Type"))
+	assert.Equal(t, "max-age=60", w.Header().Get("Cache-Control"))
+	assert.Empty(t, w.Header().Get("X-Amz-Request-Id"))
+	assert.Empty(t, w.Header().Get("Server"))
+}
+
 func TestProxyRejectsUnsupportedMethods(t *testing.T) {
 	origin := newFakeOrigin(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "served by the origin")

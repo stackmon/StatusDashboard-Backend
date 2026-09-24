@@ -222,7 +222,7 @@ func (p *Proxy) serveStream(ctx context.Context, c *gin.Context, key, cacheStatu
 			continue
 		}
 
-		copyHeaders(c.Writer.Header(), resp.Header)
+		copyHeaders(c.Writer.Header(), responseHeaders(resp.Header))
 		c.Writer.Header().Set(cacheHeader, cacheStatus)
 		c.Writer.WriteHeader(resp.StatusCode)
 
