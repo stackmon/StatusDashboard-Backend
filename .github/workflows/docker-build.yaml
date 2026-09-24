@@ -12,6 +12,8 @@ on:
 env:
   REGISTRY: swr.eu-de.otc.t-systems.com
   PROJECT: status-dashboard
+  # OTC project of the region, listed under "My Credentials > API Credentials" in the OTC console.
+  SWR_PROJECT: eu-de
 
 permissions:
   contents: read
@@ -71,18 +73,29 @@ jobs:
 
     - name: Login to Container Registry
       env:
-        SWR_URL: ${{ secrets.SWR_URL }}
-        SWR_USERNAME: ${{ secrets.SWR_USERNAME }}
-        SWR_PASSWORD: ${{ secrets.SWR_PASSWORD }}
+        SWR_AK: ${{ secrets.SWR_AK }}
+        SWR_SK: ${{ secrets.SWR_SK }}
       run: |
         set -euo pipefail
 
-        if [ -z "$SWR_URL" ] || [ -z "$SWR_USERNAME" ] || [ -z "$SWR_PASSWORD" ]; then
-          echo "The SWR_URL, SWR_USERNAME and SWR_PASSWORD organization secrets must be set" >&2
+        if [ -z "$SWR_AK" ] || [ -z "$SWR_SK" ]; then
+          echo "The SWR_AK and SWR_SK repository secrets must be set" >&2
           exit 1
         fi
 
-        printf '%s' "$SWR_PASSWORD" | docker login "$SWR_URL" --username "$SWR_USERNAME" --password-stdin
+        # SWR rejects a raw SK, so the password has to be the login key derived
+        # from the AK/SK pair, with the username in "<region>@<AK>" form. The
+        # organization secrets SWR_URL/SWR_USERNAME/SWR_PASSWORD hold a
+        # correctly shaped but dead credential: on 2026-09-24 every login
+        # combination, including the endpoint for the region named in the
+        # username, was denied, while this repository pair authenticates.
+        login_key="$(printf '%s' "$SWR_AK" | openssl dgst -sha256 -hmac "$SWR_SK" | awk '{print $NF}')"
+        if [[ ! "$login_key" =~ ^[0-9a-f]{64}$ ]]; then
+          echo "Cannot derive the SWR login key from the AK/SK pair" >&2
+          exit 1
+        fi
+
+        printf '%s' "$login_key" | docker login "$REGISTRY" --username "${SWR_PROJECT}@${SWR_AK}" --password-stdin
 
     - name: Build and push
       uses: docker/build-push-action@v7
@@ -118,18 +131,25 @@ jobs:
 
     - name: Login to Container Registry
       env:
-        SWR_URL: ${{ secrets.SWR_URL }}
-        SWR_USERNAME: ${{ secrets.SWR_USERNAME }}
-        SWR_PASSWORD: ${{ secrets.SWR_PASSWORD }}
+        SWR_AK: ${{ secrets.SWR_AK }}
+        SWR_SK: ${{ secrets.SWR_SK }}
       run: |
         set -euo pipefail
 
-        if [ -z "$SWR_URL" ] || [ -z "$SWR_USERNAME" ] || [ -z "$SWR_PASSWORD" ]; then
-          echo "The SWR_URL, SWR_USERNAME and SWR_PASSWORD organization secrets must be set" >&2
+        if [ -z "$SWR_AK" ] || [ -z "$SWR_SK" ]; then
+          echo "The SWR_AK and SWR_SK repository secrets must be set" >&2
           exit 1
         fi
 
-        printf '%s' "$SWR_PASSWORD" | docker login "$SWR_URL" --username "$SWR_USERNAME" --password-stdin
+        # See the preprod channel above for why the organization secrets are
+        # not used.
+        login_key="$(printf '%s' "$SWR_AK" | openssl dgst -sha256 -hmac "$SWR_SK" | awk '{print $NF}')"
+        if [[ ! "$login_key" =~ ^[0-9a-f]{64}$ ]]; then
+          echo "Cannot derive the SWR login key from the AK/SK pair" >&2
+          exit 1
+        fi
+
+        printf '%s' "$login_key" | docker login "$REGISTRY" --username "${SWR_PROJECT}@${SWR_AK}" --password-stdin
 
     - name: Build and push
       uses: docker/build-push-action@v7
