@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"
@@ -19,6 +20,13 @@ const DevelopMode = "devel"
 const (
 	DefaultPort            = "8000"
 	DefaultOpenAPISpecPath = "openapi.yaml"
+)
+
+// Static proxy defaults. The byte budget keeps a wide margin below the memory
+// limit of the deployment that runs this process.
+const (
+	DefaultStaticCacheTTL      = "5m"
+	DefaultStaticCacheMaxBytes = "67108864"
 )
 
 type Config struct {
@@ -40,6 +48,8 @@ type Config struct {
 	OpenAPISpecPath string `envconfig:"OPENAPI_SPEC_PATH"`
 	// RBAC configuration
 	RBAC RBACConfig `envconfig:"RBAC"`
+	// Static site proxy and cache
+	Static Static `envconfig:"STATIC"`
 }
 
 type RBACConfig struct {
@@ -61,6 +71,18 @@ type OIDC struct {
 	UsernameClaim string `envconfig:"USERNAME_CLAIM"`
 }
 
+// Static configures the proxy that serves the status dashboard static site from
+// the OBS website endpoints for every path the API does not own.
+type Static struct {
+	// Origins are the OBS website endpoints, primary first, each one a bare
+	// hostname without scheme or path. An empty list disables the proxy.
+	Origins string `envconfig:"ORIGINS"`
+	// CacheTTL applies when an origin response carries no usable Cache-Control.
+	CacheTTL string `envconfig:"CACHE_TTL"`
+	// CacheMaxBytes bounds the total size of the in-memory response cache.
+	CacheMaxBytes string `envconfig:"CACHE_MAX_BYTES"`
+}
+
 func (c *Config) Validate() error {
 	p, err := strconv.Atoi(c.Port)
 	if err != nil {
@@ -78,6 +100,10 @@ func (c *Config) Validate() error {
 		return rbacErr
 	}
 
+	if staticErr := c.Static.Validate(); staticErr != nil {
+		return staticErr
+	}
+
 	return nil
 }
 
@@ -86,6 +112,80 @@ func (r *RBACConfig) Validate() error {
 		return fmt.Errorf("SD_RBAC_ROLES_ADMINS is required")
 	}
 	return nil
+}
+
+// Validate rejects a static proxy configuration the proxy cannot use.
+func (s *Static) Validate() error {
+	origins, err := s.OriginList()
+	if err != nil {
+		return err
+	}
+
+	// A proxy without origins is disabled, so the cache settings are unused.
+	if len(origins) == 0 {
+		return nil
+	}
+
+	if _, err = s.TTL(); err != nil {
+		return err
+	}
+
+	_, err = s.MaxBytes()
+
+	return err
+}
+
+// OriginList returns the OBS website endpoints in failover order. The list is
+// empty when the static proxy is disabled.
+func (s *Static) OriginList() ([]string, error) {
+	fields := strings.Split(s.Origins, ",")
+
+	origins := make([]string, 0, len(fields))
+
+	for _, field := range fields {
+		origin := strings.TrimSpace(field)
+		if origin == "" {
+			continue
+		}
+
+		if strings.ContainsAny(origin, "/?#@: \t") {
+			return nil, fmt.Errorf(
+				"wrong SD_STATIC_ORIGINS entry %q, expected a bare hostname without scheme, path or port",
+				origin)
+		}
+
+		origins = append(origins, origin)
+	}
+
+	return origins, nil
+}
+
+// TTL is the cache lifetime applied to responses that carry no Cache-Control.
+func (s *Static) TTL() (time.Duration, error) {
+	ttl, err := time.ParseDuration(s.CacheTTL)
+	if err != nil {
+		return 0, fmt.Errorf("wrong SD_STATIC_CACHE_TTL format, expected a Go duration such as 5m: %w", err)
+	}
+
+	if ttl <= 0 {
+		return 0, fmt.Errorf("wrong SD_STATIC_CACHE_TTL value, expected a positive duration")
+	}
+
+	return ttl, nil
+}
+
+// MaxBytes is the size of the whole response cache.
+func (s *Static) MaxBytes() (int64, error) {
+	maxBytes, err := strconv.ParseInt(s.CacheMaxBytes, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("wrong SD_STATIC_CACHE_MAX_BYTES format, expected a number of bytes: %w", err)
+	}
+
+	if maxBytes <= 0 {
+		return 0, fmt.Errorf("wrong SD_STATIC_CACHE_MAX_BYTES value, expected a positive byte budget")
+	}
+
+	return maxBytes, nil
 }
 
 func (c *Config) FillDefaults() {
@@ -99,6 +199,14 @@ func (c *Config) FillDefaults() {
 
 	if c.OpenAPISpecPath == "" {
 		c.OpenAPISpecPath = DefaultOpenAPISpecPath
+	}
+
+	if c.Static.CacheTTL == "" {
+		c.Static.CacheTTL = DefaultStaticCacheTTL
+	}
+
+	if c.Static.CacheMaxBytes == "" {
+		c.Static.CacheMaxBytes = DefaultStaticCacheMaxBytes
 	}
 }
 
@@ -209,6 +317,12 @@ func (c *Config) Log(logger *zap.Logger) {
 
 	logger.Info("Endpoint configuration",
 		zap.String("port", c.Port),
+	)
+
+	logger.Info("Static site configuration",
+		zap.String("origins", c.Static.Origins),
+		zap.String("cache_ttl", c.Static.CacheTTL),
+		zap.String("cache_max_bytes", c.Static.CacheMaxBytes),
 	)
 
 	logger.Info("Authentication configuration",

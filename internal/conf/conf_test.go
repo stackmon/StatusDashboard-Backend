@@ -2,6 +2,7 @@ package conf
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -76,6 +77,157 @@ func TestConfig_Validate_PropagatesRBACError(t *testing.T) {
 	err := cfg.Validate()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "SD_RBAC_ROLES_ADMINS")
+}
+
+func TestConfig_Validate_PropagatesStaticError(t *testing.T) {
+	cfg := &Config{
+		Port: "8000",
+		OIDC: OIDC{
+			Issuer:   "https://zitadel.example.com",
+			ClientID: "status-dashboard",
+		},
+		RBAC:   RBACConfig{Admins: "sd_admins"},
+		Static: Static{Origins: "a.obs.example.com", CacheTTL: "5m", CacheMaxBytes: "0"},
+	}
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SD_STATIC_CACHE_MAX_BYTES")
+}
+
+func TestConfig_Validate_AcceptsDefaultStaticSettings(t *testing.T) {
+	cfg := &Config{
+		Port: "8000",
+		OIDC: OIDC{Issuer: "https://zitadel.example.com", ClientID: "status-dashboard"},
+		RBAC: RBACConfig{Admins: "sd_admins"},
+	}
+	cfg.FillDefaults()
+
+	require.NoError(t, cfg.Validate())
+}
+
+func TestStatic_Validate(t *testing.T) {
+	valid := Static{CacheTTL: "5m", CacheMaxBytes: "67108864"}
+
+	tests := []struct {
+		name      string
+		cfg       Static
+		expectErr bool
+		errSubstr string
+	}{
+		{
+			name: "Proxy disabled without origins",
+			cfg:  Static{},
+		},
+		{
+			name: "Unused cache settings are ignored while the proxy is disabled",
+			cfg:  Static{CacheTTL: "5 minutes", CacheMaxBytes: "0"},
+		},
+		{
+			name: "Configured origins with usable cache settings",
+			cfg:  valid,
+		},
+		{
+			name: "Several origins in failover order",
+			cfg:  Static{Origins: "a.obs.example.com,b.obs.example.com", CacheTTL: "1m", CacheMaxBytes: "1024"},
+		},
+		{
+			name: "Empty entries between origins are ignored",
+			cfg:  Static{Origins: ",a.obs.example.com, ,", CacheTTL: "1m", CacheMaxBytes: "1024"},
+		},
+		{
+			name:      "Origin with a scheme",
+			cfg:       Static{Origins: "https://a.obs.example.com", CacheTTL: "1m", CacheMaxBytes: "1024"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_ORIGINS",
+		},
+		{
+			name:      "Origin with a path",
+			cfg:       Static{Origins: "a.obs.example.com/index.html", CacheTTL: "1m", CacheMaxBytes: "1024"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_ORIGINS",
+		},
+		{
+			name:      "Origin with a port",
+			cfg:       Static{Origins: "a.obs.example.com:443", CacheTTL: "1m", CacheMaxBytes: "1024"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_ORIGINS",
+		},
+		{
+			name:      "Malformed duration",
+			cfg:       Static{Origins: "a.obs.example.com", CacheTTL: "5 minutes", CacheMaxBytes: "1024"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_CACHE_TTL",
+		},
+		{
+			name:      "Missing duration",
+			cfg:       Static{Origins: "a.obs.example.com", CacheMaxBytes: "1024"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_CACHE_TTL",
+		},
+		{
+			name:      "Zero duration",
+			cfg:       Static{Origins: "a.obs.example.com", CacheTTL: "0s", CacheMaxBytes: "1024"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_CACHE_TTL",
+		},
+		{
+			name:      "Negative duration",
+			cfg:       Static{Origins: "a.obs.example.com", CacheTTL: "-5m", CacheMaxBytes: "1024"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_CACHE_TTL",
+		},
+		{
+			name:      "Byte budget with a unit",
+			cfg:       Static{Origins: "a.obs.example.com", CacheTTL: "1m", CacheMaxBytes: "64MiB"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_CACHE_MAX_BYTES",
+		},
+		{
+			name:      "Zero byte budget",
+			cfg:       Static{Origins: "a.obs.example.com", CacheTTL: "1m", CacheMaxBytes: "0"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_CACHE_MAX_BYTES",
+		},
+		{
+			name:      "Negative byte budget",
+			cfg:       Static{Origins: "a.obs.example.com", CacheTTL: "1m", CacheMaxBytes: "-1024"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_CACHE_MAX_BYTES",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.Validate()
+			if tc.expectErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.errSubstr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestStatic_Accessors(t *testing.T) {
+	cfg := Static{
+		Origins:       " primary.obs.example.com , backup.obs.example.com ",
+		CacheTTL:      "90s",
+		CacheMaxBytes: "1048576",
+	}
+
+	origins, err := cfg.OriginList()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"primary.obs.example.com", "backup.obs.example.com"}, origins)
+
+	ttl, err := cfg.TTL()
+	require.NoError(t, err)
+	assert.Equal(t, 90*time.Second, ttl)
+
+	maxBytes, err := cfg.MaxBytes()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1048576), maxBytes)
 }
 
 func TestConfig_Validate_RequiresOIDC(t *testing.T) {
@@ -191,6 +343,8 @@ func TestFillDefaults(t *testing.T) {
 		assert.Equal(t, DevelopMode, c.LogLevel)
 		assert.Equal(t, DefaultPort, c.Port)
 		assert.Equal(t, DefaultOpenAPISpecPath, c.OpenAPISpecPath)
+		assert.Equal(t, DefaultStaticCacheTTL, c.Static.CacheTTL)
+		assert.Equal(t, DefaultStaticCacheMaxBytes, c.Static.CacheMaxBytes)
 	})
 
 	t.Run("preserves existing values", func(t *testing.T) {
@@ -199,6 +353,7 @@ func TestFillDefaults(t *testing.T) {
 			Port:            "9090",
 			OpenAPISpecPath: "custom.yaml",
 			RBAC:            RBACConfig{Creators: "sd_creators", Admins: "sd_admins"},
+			Static:          Static{Origins: "a.obs.example.com", CacheTTL: "1m", CacheMaxBytes: "4096"},
 		}
 		c.FillDefaults()
 
@@ -207,6 +362,9 @@ func TestFillDefaults(t *testing.T) {
 		assert.Equal(t, "custom.yaml", c.OpenAPISpecPath)
 		assert.Equal(t, "sd_creators", c.RBAC.Creators)
 		assert.Equal(t, "sd_admins", c.RBAC.Admins)
+		assert.Equal(t, "a.obs.example.com", c.Static.Origins)
+		assert.Equal(t, "1m", c.Static.CacheTTL)
+		assert.Equal(t, "4096", c.Static.CacheMaxBytes)
 	})
 }
 
@@ -304,6 +462,20 @@ func TestMergeConfigs(t *testing.T) {
 		assert.Equal(t, "https://zitadel.example.com", c.OIDC.Issuer)
 		assert.Equal(t, "status-dashboard", c.OIDC.ClientID)
 	})
+
+	t.Run("merges into embedded struct (Static)", func(t *testing.T) {
+		c := &Config{}
+		env := map[string]string{
+			"SD_STATIC_ORIGINS":         "a.obs.example.com",
+			"SD_STATIC_CACHE_TTL":       "1m",
+			"SD_STATIC_CACHE_MAX_BYTES": "4096",
+		}
+		err := mergeConfigs(env, c, "SD")
+		require.NoError(t, err)
+		assert.Equal(t, "a.obs.example.com", c.Static.Origins)
+		assert.Equal(t, "1m", c.Static.CacheTTL)
+		assert.Equal(t, "4096", c.Static.CacheMaxBytes)
+	})
 }
 
 func TestConfig_Log(t *testing.T) {
@@ -347,5 +519,23 @@ func TestConfig_Log(t *testing.T) {
 		assert.Equal(t, "sd_operators", fields["operators_role"])
 		assert.Equal(t, "sd_admins", fields["admins_role"])
 		assert.Equal(t, "sd_reporters", fields["reporters_role"])
+	})
+
+	t.Run("logs the static site configuration", func(t *testing.T) {
+		core, logs := observer.New(zap.InfoLevel)
+
+		c := &Config{
+			Port:   "8000",
+			Static: Static{Origins: "bucket.obs.example.com", CacheTTL: "5m", CacheMaxBytes: "67108864"},
+		}
+		c.Log(zap.New(core))
+
+		entries := logs.FilterMessage("Static site configuration").All()
+		require.Len(t, entries, 1)
+
+		fields := entries[0].ContextMap()
+		assert.Equal(t, "bucket.obs.example.com", fields["origins"])
+		assert.Equal(t, "5m", fields["cache_ttl"])
+		assert.Equal(t, "67108864", fields["cache_max_bytes"])
 	})
 }
