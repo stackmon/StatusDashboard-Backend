@@ -12,7 +12,6 @@ on:
 env:
   REGISTRY: swr.eu-de.otc.t-systems.com
   PROJECT: status-dashboard
-  # OTC project of the region, listed under "My Credentials > API Credentials" in the OTC console.
   SWR_PROJECT: eu-de
 
 permissions:
@@ -83,12 +82,6 @@ jobs:
           exit 1
         fi
 
-        # SWR rejects a raw SK, so the password has to be the login key derived
-        # from the AK/SK pair, with the username in "<region>@<AK>" form. The
-        # organization secrets SWR_URL/SWR_USERNAME/SWR_PASSWORD hold a
-        # correctly shaped but dead credential: on 2026-09-24 every login
-        # combination, including the endpoint for the region named in the
-        # username, was denied, while this repository pair authenticates.
         login_key="$(printf '%s' "$SWR_AK" | openssl dgst -sha256 -hmac "$SWR_SK" | awk '{print $NF}')"
         if [[ ! "$login_key" =~ ^[0-9a-f]{64}$ ]]; then
           echo "Cannot derive the SWR login key from the AK/SK pair" >&2
@@ -141,8 +134,6 @@ jobs:
           exit 1
         fi
 
-        # See the preprod channel above for why the organization secrets are
-        # not used.
         login_key="$(printf '%s' "$SWR_AK" | openssl dgst -sha256 -hmac "$SWR_SK" | awk '{print $NF}')"
         if [[ ! "$login_key" =~ ^[0-9a-f]{64}$ ]]; then
           echo "Cannot derive the SWR login key from the AK/SK pair" >&2
