@@ -1167,11 +1167,14 @@ func checkPatchData(incoming *PatchIncidentData, stored *db.Incident) error {
 		return apiErrors.ErrIncidentDescriptionTooLong
 	}
 
-	// incoming.Type is now validated by the 'oneof' binding tag in PatchIncidentData
-	effectiveType := stored.Type
-	if incoming.Type != "" {
-		effectiveType = incoming.Type
+	// The type is immutable. A type change is validated against the incoming
+	// impact only, so it can leave the event in a state its new type forbids —
+	// e.g. an open incident (no end_date) turned into a maintenance.
+	if incoming.Type != "" && incoming.Type != stored.Type {
+		return apiErrors.ErrIncidentPatchTypeForbidden
 	}
+
+	effectiveType := stored.Type
 	effectiveImpact := *stored.Impact
 	if incoming.Impact != nil {
 		effectiveImpact = *incoming.Impact
@@ -1241,10 +1244,6 @@ func updateFields(income *PatchIncidentData, stored *db.Incident) {
 
 	if income.Impact != nil {
 		stored.Impact = income.Impact
-	}
-
-	if income.Type != "" {
-		stored.Type = income.Type
 	}
 
 	stored.Status = income.Status

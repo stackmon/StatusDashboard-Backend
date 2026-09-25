@@ -179,7 +179,9 @@ func calculateCurrentMntStatus(sHistory *MntStatusHistory, mn *db.Incident) even
 		return event.MaintenancePlanned
 	}
 
-	if mn.StartDate.Before(now) && mn.EndDate.After(now) {
+	// An open-ended maintenance (end_date empty) is still running, matching how
+	// info events are handled. Without the nil check the dereference panics.
+	if mn.StartDate.Before(now) && (mn.EndDate == nil || mn.EndDate.After(now)) {
 		return event.MaintenanceInProgress
 	}
 

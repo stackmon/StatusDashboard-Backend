@@ -35,6 +35,7 @@ var ErrIncidentPatchOpenedStartDate = errors.New("can not change start date for 
 var ErrIncidentPatchOpenedEndDateMissing = errors.New("wrong end date with resolved status")
 var ErrIncidentPatchImpactStatusWrong = errors.New("wrong status for changing impact")
 var ErrIncidentPatchImpactToZeroForbidden = errors.New("can not change impact to 0")
+var ErrIncidentPatchTypeForbidden = errors.New("can not change event type")
 
 var ErrMaintenanceEndDateEmpty = errors.New("maintenance end_date is empty")
 
