@@ -343,24 +343,82 @@ func TestProxyFailsOverOnOriginError(t *testing.T) {
 	assert.Equal(t, int64(1), live.hits.Load())
 }
 
-func TestProxyHeadIsNotCached(t *testing.T) {
+func TestProxyHeadIsAnsweredFromTheCachedGet(t *testing.T) {
 	origin := newFakeOrigin(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("Cache-Control", "max-age=60")
 		_, _ = io.WriteString(w, "<html>site</html>")
 	})
 
 	router, proxy := newTestRouter(t, origin)
 
-	for range 2 {
-		w := request(t, router, http.MethodHead, "/index.html")
-		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Equal(t, cacheBypass, w.Header().Get(cacheHeader))
-		assert.Equal(t, "text/html", w.Header().Get("Content-Type"))
-		assert.Empty(t, w.Body.String())
-	}
+	cached := request(t, router, http.MethodGet, "/index.html")
+	require.Equal(t, http.StatusOK, cached.Code)
+	require.Equal(t, cacheMiss, cached.Header().Get(cacheHeader))
 
+	w := request(t, router, http.MethodHead, "/index.html")
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, cacheHit, w.Header().Get(cacheHeader))
+	assert.Equal(t, cached.Header().Get("Content-Type"), w.Header().Get("Content-Type"))
+	assert.Equal(t, cached.Header().Get("Content-Length"), w.Header().Get("Content-Length"))
+	assert.Empty(t, w.Body.String())
+
+	assert.Equal(t, int64(1), origin.hits.Load())
+	assert.Equal(t, 1, proxy.Cache().Len())
+}
+
+// A response marked no-cache must not be reused without validation, but it is
+// still worth keeping: index.html is served that way, and the stored copy is
+// what keeps the site reachable while no origin answers.
+func TestProxyServesNoCacheEntryOnlyAsStale(t *testing.T) {
+	origin := newFakeOrigin(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Header().Set("Cache-Control", "public, no-cache, must-revalidate")
+		_, _ = io.WriteString(w, "<html>index</html>")
+	})
+
+	router, proxy := newTestRouter(t, origin)
+
+	first := request(t, router, http.MethodGet, "/index.html")
+	require.Equal(t, http.StatusOK, first.Code)
+	require.Equal(t, cacheMiss, first.Header().Get(cacheHeader))
+	require.Equal(t, 1, proxy.Cache().Len())
+
+	again := request(t, router, http.MethodGet, "/index.html")
+	assert.Equal(t, cacheMiss, again.Header().Get(cacheHeader))
 	assert.Equal(t, int64(2), origin.hits.Load())
+
+	origin.server.Close()
+
+	stale := request(t, router, http.MethodGet, "/index.html")
+	assert.Equal(t, http.StatusOK, stale.Code)
+	assert.Equal(t, cacheStale, stale.Header().Get(cacheHeader))
+	assert.Equal(t, "<html>index</html>", stale.Body.String())
+
+	head := request(t, router, http.MethodHead, "/index.html")
+	assert.Equal(t, http.StatusOK, head.Code)
+	assert.Equal(t, cacheStale, head.Header().Get(cacheHeader))
+	assert.Empty(t, head.Body.String())
+}
+
+// no-store forbids keeping the response at all, so an unreachable origin has
+// nothing to fall back to.
+func TestProxyDoesNotKeepNoStoreResponse(t *testing.T) {
+	origin := newFakeOrigin(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = io.WriteString(w, "<html>volatile</html>")
+	})
+
+	router, proxy := newTestRouter(t, origin)
+
+	w := request(t, router, http.MethodGet, "/index.html")
+	require.Equal(t, http.StatusOK, w.Code)
 	assert.Zero(t, proxy.Cache().Len())
+
+	origin.server.Close()
+
+	gone := request(t, router, http.MethodGet, "/index.html")
+	assert.Equal(t, http.StatusBadGateway, gone.Code)
 }
 
 // Streaming skips the cache buffer, but it must not skip the header filtering
@@ -380,7 +438,7 @@ func TestProxyStreamedResponseHidesOriginHeaders(t *testing.T) {
 	w := request(t, router, http.MethodHead, "/index.html")
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, cacheBypass, w.Header().Get(cacheHeader))
+	assert.Equal(t, cacheMiss, w.Header().Get(cacheHeader))
 	assert.Equal(t, "text/html", w.Header().Get("Content-Type"))
 	assert.Equal(t, "max-age=60", w.Header().Get("Cache-Control"))
 	assert.Empty(t, w.Header().Get("X-Amz-Request-Id"))
