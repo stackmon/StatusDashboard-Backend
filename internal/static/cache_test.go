@@ -141,9 +141,16 @@ func TestCacheTTLFromCacheControl(t *testing.T) {
 			storable: false,
 		},
 		{
-			name:     "no-cache is never stored",
+			name:     "no-cache is stored but never fresh",
 			header:   http.Header{"Cache-Control": []string{"public, no-cache"}},
-			storable: false,
+			expected: 0,
+			storable: true,
+		},
+		{
+			name:     "no-cache wins over max-age",
+			header:   http.Header{"Cache-Control": []string{"no-cache, max-age=600"}},
+			expected: 0,
+			storable: true,
 		},
 		{
 			name:     "malformed max-age falls back",

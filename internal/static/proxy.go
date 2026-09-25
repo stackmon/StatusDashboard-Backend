@@ -33,12 +33,11 @@ const (
 
 	cacheHeader = "X-Cache"
 
-	// Values of X-Cache: served from the cache, fetched from an origin, served
-	// stale while no origin answered, or not looked up at all.
-	cacheHit    = "HIT"
-	cacheMiss   = "MISS"
-	cacheStale  = "STALE"
-	cacheBypass = "BYPASS"
+	// Values of X-Cache: served from the cache, fetched from an origin, or
+	// served stale while no origin answered.
+	cacheHit   = "HIT"
+	cacheMiss  = "MISS"
+	cacheStale = "STALE"
 )
 
 var (
@@ -194,10 +193,19 @@ func (p *Proxy) serveResult(c *gin.Context, key string, result singleflight.Resu
 	writeEntry(c, e, cacheMiss)
 }
 
-// serveHead keeps HEAD out of the cache: the origin body is empty, so a direct
-// pass-through costs a round trip and nothing else.
+// serveHead answers HEAD from the cached GET entry, with the header fields the
+// GET produced (RFC 9110 section 9.3.2). A miss goes to an origin directly: a
+// HEAD response carries no body worth storing.
 func (p *Proxy) serveHead(c *gin.Context) {
-	p.serveStream(context.WithoutCancel(c.Request.Context()), c, "", cacheBypass)
+	key := cacheKey(c.Request)
+
+	if e, ok := p.cache.get(key); ok {
+		writeEntry(c, e, cacheHit)
+
+		return
+	}
+
+	p.serveStream(context.WithoutCancel(c.Request.Context()), c, key, cacheMiss)
 }
 
 // serveStream copies a response through without buffering it, walking the
@@ -396,9 +404,10 @@ func (b *deadlineBody) Close() error {
 }
 
 // cacheKey identifies a response: the same path is served for several hostnames,
-// and their content differs.
+// and their content differs. The method is not part of the key, since only GET
+// responses are stored and HEAD is answered from the GET entry.
 func cacheKey(req *http.Request) string {
-	return req.Method + " " + req.Host + req.URL.Path + "?" + req.URL.RawQuery
+	return req.Host + req.URL.Path + "?" + req.URL.RawQuery
 }
 
 // failedStatus reports the origin statuses that trigger the failover chain.
@@ -432,8 +441,16 @@ type cacheDirectives struct {
 func cacheTTL(header http.Header, fallback time.Duration) (time.Duration, bool) {
 	directives := parseCacheControl(header)
 
-	if directives.noStore || directives.noCache {
+	if directives.noStore {
 		return 0, false
+	}
+
+	// no-cache allows storing the response but forbids reusing it without
+	// validation. A zero lifetime expresses that: every request goes back to the
+	// origin, and the entry is left for the stale fallback. The site's
+	// index.html is served this way.
+	if directives.noCache {
+		return 0, true
 	}
 
 	switch {
