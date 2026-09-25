@@ -81,6 +81,52 @@ func TestCalculateCurrentMntStatus(t *testing.T) {
 	}
 }
 
+func TestCalculateCurrentMntStatusEmptyEndDate(t *testing.T) {
+	future := time.Now().UTC().Add(24 * time.Hour)
+	past := time.Now().UTC().Add(-1 * time.Hour)
+
+	tests := []struct {
+		name           string
+		startDate      time.Time
+		expectedStatus event.Status
+	}{
+		{
+			name:           "Empty end date with past start stays in_progress",
+			startDate:      past,
+			expectedStatus: event.MaintenanceInProgress,
+		},
+		{
+			name:           "Empty end date with future start stays planned",
+			startDate:      future,
+			expectedStatus: event.MaintenancePlanned,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mn := &db.Incident{
+				Status:    event.MaintenanceInProgress,
+				StartDate: &tc.startDate,
+			}
+
+			assert.Equal(t, tc.expectedStatus, calculateCurrentMntStatus(&MntStatusHistory{}, mn))
+		})
+	}
+}
+
+// TestEvaluateAndFixMntStatusEmptyEndDate covers the whole evaluation path for
+// a maintenance without an end date, which used to panic on a nil dereference.
+func TestEvaluateAndFixMntStatusEmptyEndDate(t *testing.T) {
+	startDate := time.Now().UTC().Add(-1 * time.Hour)
+	ch := &Checker{log: zap.NewNop()}
+	mnt := &db.Incident{
+		Status:    event.MaintenanceInProgress,
+		StartDate: &startDate,
+	}
+
+	assert.Equal(t, event.MaintenanceInProgress, ch.evaluateAndFixMntStatus(mnt))
+}
+
 // TestFixMntMissedStatuses_Cancelled verifies that fixMntMissedStatuses does
 // NOT fabricate a "planned" audit entry when a maintenance is cancelled before
 // it ever entered the regular workflow (i.e. cancelled from pending_review),

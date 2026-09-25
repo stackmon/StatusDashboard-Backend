@@ -729,6 +729,89 @@ func TestCheckPatchDataDescriptionLength(t *testing.T) {
 	}
 }
 
+// TestCheckPatchDataTypeChangeForbidden verifies that PATCH rejects any attempt
+// to change the event type.
+func TestCheckPatchDataTypeChangeForbidden(t *testing.T) {
+	impact := 2
+	stored := &db.Incident{
+		Type:   event.TypeIncident,
+		Impact: &impact,
+	}
+
+	testCases := []struct {
+		name        string
+		incomingTyp string
+		expectError bool
+	}{
+		{
+			name:        "type omitted is valid",
+			incomingTyp: "",
+			expectError: false,
+		},
+		{
+			name:        "unchanged type is valid",
+			incomingTyp: event.TypeIncident,
+			expectError: false,
+		},
+		{
+			name:        "incident to maintenance returns ErrIncidentPatchTypeForbidden",
+			incomingTyp: event.TypeMaintenance,
+			expectError: true,
+		},
+		{
+			name:        "incident to info returns ErrIncidentPatchTypeForbidden",
+			incomingTyp: event.TypeInformation,
+			expectError: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			incoming := &PatchIncidentData{
+				Status: event.IncidentDetected,
+				Type:   tc.incomingTyp,
+			}
+			err := checkPatchData(incoming, stored)
+			if tc.expectError {
+				require.Error(t, err)
+				assert.Equal(t, errors.ErrIncidentPatchTypeForbidden, err)
+				return
+			}
+			assert.NoError(t, err)
+		})
+	}
+}
+
+// TestPatchEventTypeChangeHandler verifies that PATCH /v2/events/:eventID returns HTTP 400
+// when the request tries to change the event type.
+func TestPatchEventTypeChangeHandler(t *testing.T) {
+	impact := 2
+	testTime := time.Now().UTC().Add(-time.Hour)
+	storedIncident := &db.Incident{
+		ID:        112,
+		Text:      &[]string{"Test Incident"}[0],
+		Impact:    &impact,
+		Type:      event.TypeIncident,
+		StartDate: &testTime,
+	}
+
+	r := initRouterWithStoredEvent(t, storedIncident)
+
+	updateDate := time.Now().UTC().Format(time.RFC3339)
+	body := fmt.Sprintf(
+		`{"status":"detecting","message":"test message","update_date":%q,"type":"maintenance"}`,
+		updateDate,
+	)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPatch, "/v2/events/112", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 // TestPatchEventDescriptionTooLongHandler verifies that PATCH /v2/events/:eventID returns HTTP 400
 // when the incoming description exceeds the 1500-character maximum.
 func TestPatchEventDescriptionTooLongHandler(t *testing.T) {
