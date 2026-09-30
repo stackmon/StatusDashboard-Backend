@@ -19,7 +19,7 @@ RUN --mount=type=cache,target=/go/pkg/mod/ \
     CGO_ENABLED=0 GOARCH=$TARGETARCH go build -o /usr/local/bin/app cmd/main.go
 
 # Stage 2: Create a minimal production image
-FROM alpine:3.21 AS final
+FROM alpine:3.24 AS final
 
 # Install necessary packages
 RUN --mount=type=cache,target=/var/cache/apk \
