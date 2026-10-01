@@ -179,6 +179,46 @@ func TestWorker_PanicIsolatedPerRow(t *testing.T) {
 	assert.Contains(t, *boomRow.LastError, "panic")
 }
 
+// cancelAwareSender blocks in Send until its context is cancelled, simulating an
+// SMTP send interrupted mid-flight during shutdown.
+type cancelAwareSender struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (s *cancelAwareSender) Send(ctx context.Context, _ string, _ notification.Email) error {
+	s.once.Do(func() { close(s.started) })
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestWorker_CancelledMidDelivery_RecordsStatus(t *testing.T) {
+	truncateIncidents(t)
+	d, g := newNotifDB(t)
+	incID := seedIncident(t, d)
+	row := newOutboxRow(incID, "slow@com.com")
+	require.NoError(t, d.Enqueue(context.Background(), nil, row))
+
+	sender := &cancelAwareSender{started: make(chan struct{})}
+	w := testWorker(t, d, sender, 3)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		w.Run(ctx)
+		close(done)
+	}()
+
+	w.Notify()
+	<-sender.started // wait until the send is in flight
+
+	cancel()
+	<-done // Run must wait for the in-flight deliver to finish before returning
+
+	status := fetchByDedup(t, g, row.DedupKey).Status
+	assert.NotEqual(t, db.NotificationStatusProcessing, status, "row must not be left processing after cancellation")
+}
+
 func TestWorker_DrainTwiceDoesNotResend(t *testing.T) {
 	truncateIncidents(t)
 	ctx := context.Background()
