@@ -117,6 +117,45 @@ func TestAPI_AdminCreateMaintenance_EnqueuesCreatorOnly(t *testing.T) {
 	assert.Equal(t, []string{"test@example.com"}, outboxRecipients(t, g, eventID))
 }
 
+func TestAPI_PatchUnchangedStatus_NoNotification(t *testing.T) {
+	truncateIncidents(t)
+	r, g := initNotifRouter(t)
+
+	// Admin submission bypasses review -> planned.
+	resp := createEventOK(t, r, maintenanceData(), adminToken)
+	eventID := resp.Result[0].IncidentID
+	created := getEventOK(t, r, eventID, adminToken)
+	before := outboxCount(t, g, eventID)
+	require.Greater(t, before, int64(0), "create enqueued a notification")
+
+	newTitle := "updated title"
+	patch := patchData(created.Status, created.Version)
+	patch.Title = &newTitle
+	w := patchEvent(t, r, eventID, patch, adminToken)
+	require.Equal(t, http.StatusOK, w.Code, "patch failed: %s", w.Body.String())
+
+	assert.Equal(t, before, outboxCount(t, g, eventID), "unchanged status must not enqueue a notification")
+}
+
+func TestAPI_PatchStatusChange_EnqueuesNotification(t *testing.T) {
+	truncateIncidents(t)
+	r, g := initNotifRouter(t)
+
+	resp := createEventOK(t, r, maintenanceData(), adminToken)
+	eventID := resp.Result[0].IncidentID
+	created := getEventOK(t, r, eventID, adminToken)
+	before := outboxCount(t, g, eventID)
+
+	next := event.MaintenanceInProgress
+	if created.Status == next {
+		next = event.MaintenanceCompleted
+	}
+	w := patchEvent(t, r, eventID, patchData(next, created.Version), adminToken)
+	require.Equal(t, http.StatusOK, w.Code, "patch failed: %s", w.Body.String())
+
+	assert.Greater(t, outboxCount(t, g, eventID), before, "status change must enqueue a notification")
+}
+
 func TestAPI_FailedPatchVersionConflict_NoNewOutboxRow(t *testing.T) {
 	truncateIncidents(t)
 	r, g := initNotifRouter(t)

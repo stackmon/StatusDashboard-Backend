@@ -296,3 +296,42 @@ func TestAPI_RedriveNotifications_Admin(t *testing.T) {
 	assert.Equal(t, int64(1), resp.Redriven)
 	assert.Equal(t, db.NotificationStatusPending, fetchByDedup(t, g, dedup).Status)
 }
+
+func TestAPI_RedriveNotifications_EmptyBodyRedrivesAll(t *testing.T) {
+	truncateIncidents(t)
+	r, d, g := initNotifOpsRouter(t)
+	incID := seedIncident(t, d)
+	failedCols := map[string]any{"status": db.NotificationStatusFailed, "attempts": 5, "last_error": "x"}
+	a := enqueueWithState(t, d, g, incID, "a@com.com", failedCols)
+	b := enqueueWithState(t, d, g, incID, "b@com.com", failedCols)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/v2/notifications/redrive", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Redriven int64 `json:"redriven"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, int64(2), resp.Redriven)
+	assert.Equal(t, db.NotificationStatusPending, fetchByDedup(t, g, a).Status)
+	assert.Equal(t, db.NotificationStatusPending, fetchByDedup(t, g, b).Status)
+}
+
+func TestAPI_RedriveNotifications_MalformedBodyRejected(t *testing.T) {
+	truncateIncidents(t)
+	r, d, g := initNotifOpsRouter(t)
+	incID := seedIncident(t, d)
+	dedup := enqueueWithState(t, d, g, incID, "f@com.com",
+		map[string]any{"status": db.NotificationStatusFailed, "attempts": 5, "last_error": "x"})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/v2/notifications/redrive", bytes.NewReader([]byte(`{invalid}`)))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, db.NotificationStatusFailed, fetchByDedup(t, g, dedup).Status, "no redrive on malformed body")
+}
