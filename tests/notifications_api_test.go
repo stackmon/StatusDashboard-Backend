@@ -126,7 +126,7 @@ func TestAPI_PatchUnchangedStatus_NoNotification(t *testing.T) {
 	eventID := resp.Result[0].IncidentID
 	created := getEventOK(t, r, eventID, adminToken)
 	before := outboxCount(t, g, eventID)
-	require.Greater(t, before, int64(0), "create enqueued a notification")
+	require.Positive(t, before, "create enqueued a notification")
 
 	newTitle := "updated title"
 	patch := patchData(created.Status, created.Version)
