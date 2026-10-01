@@ -17,9 +17,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/stackmon/otc-status-dashboard/internal/api"
-	"github.com/stackmon/otc-status-dashboard/internal/api/auth"
 	apiErrors "github.com/stackmon/otc-status-dashboard/internal/api/errors"
-	"github.com/stackmon/otc-status-dashboard/internal/api/rbac"
 	v2 "github.com/stackmon/otc-status-dashboard/internal/api/v2"
 	"github.com/stackmon/otc-status-dashboard/internal/conf"
 	"github.com/stackmon/otc-status-dashboard/internal/db"
@@ -172,20 +170,20 @@ func initNotifOpsRouter(t *testing.T) (*gin.Engine, *db.DB, *gorm.DB) {
 	r.Use(api.ErrorHandle())
 
 	logger := zap.NewNop()
-	prov := &auth.Provider{}
-	rbacSvc := rbac.New(creatorGroup, operatorGroup, adminGroup)
+	prov := testIDP.provider(t, testRBACService().RoleNames()...)
+	rbacSvc := testRBACService()
 
 	v2Api := r.Group("v2")
 	v2Api.GET("notifications/stats",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(prov, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		v2.GetNotificationStatsHandler(d, logger))
 	v2Api.POST("notifications/redrive",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(prov, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		v2.RedriveNotificationsHandler(d, logger))
 	v2Api.GET("notifications/failed",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(prov, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		v2.GetFailedNotificationsHandler(d, logger))
 

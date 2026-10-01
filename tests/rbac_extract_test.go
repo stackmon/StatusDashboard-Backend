@@ -14,7 +14,7 @@ import (
 // TestExtract_AdminCanExtractIncident verifies that admin can extract
 // components from an incident-type event.
 func TestExtract_AdminCanExtractIncident(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, incidentDataMultiComponent(), adminToken)
@@ -27,7 +27,7 @@ func TestExtract_AdminCanExtractIncident(t *testing.T) {
 // TestExtract_OperatorCanExtractIncident verifies that operator can extract
 // components from an incident-type event.
 func TestExtract_OperatorCanExtractIncident(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, incidentDataMultiComponent(), operatorToken)
@@ -40,7 +40,7 @@ func TestExtract_OperatorCanExtractIncident(t *testing.T) {
 // TestExtract_CreatorCannotExtractIncident verifies that creator role
 // is denied extract even on an incident-type event.
 func TestExtract_CreatorCannotExtractIncident(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	// Create as admin so it exists, then try extract as creator.
@@ -54,7 +54,7 @@ func TestExtract_CreatorCannotExtractIncident(t *testing.T) {
 // TestExtract_NoRoleCannotExtract verifies that a user with no recognized
 // RBAC group is denied extract.
 func TestExtract_NoRoleCannotExtract(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, incidentDataMultiComponent(), adminToken)
@@ -67,7 +67,7 @@ func TestExtract_NoRoleCannotExtract(t *testing.T) {
 // TestExtract_UnauthenticatedCannotExtract verifies that requests without
 // a token are rejected.
 func TestExtract_UnauthenticatedCannotExtract(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, incidentDataMultiComponent(), adminToken)
@@ -80,7 +80,7 @@ func TestExtract_UnauthenticatedCannotExtract(t *testing.T) {
 // TestExtract_ForbiddenForMaintenance verifies that extract is blocked
 // for maintenance-type events even for admin.
 func TestExtract_ForbiddenForMaintenance(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	// Create maintenance as admin (starts at planned).
@@ -94,7 +94,7 @@ func TestExtract_ForbiddenForMaintenance(t *testing.T) {
 // TestExtract_ForbiddenForInfo verifies that extract is blocked
 // for info-type events even for admin.
 func TestExtract_ForbiddenForInfo(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, infoEventData(), adminToken)
@@ -107,7 +107,7 @@ func TestExtract_ForbiddenForInfo(t *testing.T) {
 // TestExtract_OperatorCannotExtractMaintenance verifies that even operator
 // cannot extract from maintenance.
 func TestExtract_OperatorCannotExtractMaintenance(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, maintenanceData(), operatorToken)
@@ -120,7 +120,7 @@ func TestExtract_OperatorCannotExtractMaintenance(t *testing.T) {
 // TestExtract_CreatorCannotExtractMaintenance verifies that creator
 // is denied extract for maintenance (role check fires first).
 func TestExtract_CreatorCannotExtractMaintenance(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, maintenanceData(), creatorTokenA)
@@ -133,7 +133,7 @@ func TestExtract_CreatorCannotExtractMaintenance(t *testing.T) {
 // TestExtract_OperatorCannotExtractInfo verifies that operator
 // cannot extract from info events.
 func TestExtract_OperatorCannotExtractInfo(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, infoEventData(), operatorToken)
@@ -146,7 +146,7 @@ func TestExtract_OperatorCannotExtractInfo(t *testing.T) {
 // TestExtract_IncidentTypeCombinations is a matrix test that verifies
 // extract restrictions across all role × event-type combinations.
 func TestExtract_IncidentTypeCombinations(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 
 	tests := []struct {
 		name       string

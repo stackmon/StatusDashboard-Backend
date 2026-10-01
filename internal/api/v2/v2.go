@@ -31,10 +31,10 @@ const (
 )
 
 const (
-	UsernameContextKey     = "userID"
-	UserEmailContextKey    = "userEmail"
-	UserIDGroupsContextKey = "userIDGroups"
-	RoleContextKey         = "role"
+	UserIDContextKey      = "userID"
+	UserIDRolesContextKey = "userIDRoles"
+	UserEmailContextKey   = "userEmail"
+	RoleContextKey        = "role"
 )
 
 type IncidentID struct {
@@ -164,23 +164,25 @@ func parsePaginationParams(c *gin.Context, params *db.IncidentsParams) error {
 	return nil
 }
 
-// hasExtendedView checks if user has a resolved role above NoRole (authenticated and authorized via RBAC).
+// hasExtendedView checks if the caller holds a role that grants the extended
+// view of internal event fields (creator, contact_email, version). Reporter
+// roles are machine principals and stay on the public view.
 func hasExtendedView(c *gin.Context, svc *rbac.Service) bool {
 	if svc == nil {
 		return false
 	}
 
-	val, exists := c.Get(UserIDGroupsContextKey)
+	val, exists := c.Get(UserIDRolesContextKey)
 	if !exists {
 		return false
 	}
 
-	groups, ok := val.([]string)
-	if !ok || len(groups) == 0 {
+	roles, ok := val.([]string)
+	if !ok || len(roles) == 0 {
 		return false
 	}
 
-	return svc.HasAuthorizedGroup(groups)
+	return svc.ResolveRole(roles).CanViewInternalFields()
 }
 
 func GetIncidentsHandler(dbInst *db.DB, logger *zap.Logger, svc *rbac.Service) gin.HandlerFunc {
@@ -1237,11 +1239,14 @@ func checkPatchData(incoming *PatchIncidentData, stored *db.Incident) error {
 		return apiErrors.ErrIncidentDescriptionTooLong
 	}
 
-	// incoming.Type is now validated by the 'oneof' binding tag in PatchIncidentData
-	effectiveType := stored.Type
-	if incoming.Type != "" {
-		effectiveType = incoming.Type
+	// The type is immutable. A type change is validated against the incoming
+	// impact only, so it can leave the event in a state its new type forbids —
+	// e.g. an open incident (no end_date) turned into a maintenance.
+	if incoming.Type != "" && incoming.Type != stored.Type {
+		return apiErrors.ErrIncidentPatchTypeForbidden
 	}
+
+	effectiveType := stored.Type
 	effectiveImpact := *stored.Impact
 	if incoming.Impact != nil {
 		effectiveImpact = *incoming.Impact
@@ -1311,10 +1316,6 @@ func updateFields(income *PatchIncidentData, stored *db.Incident) {
 
 	if income.Impact != nil {
 		stored.Impact = income.Impact
-	}
-
-	if income.Type != "" {
-		stored.Type = income.Type
 	}
 
 	stored.Status = income.Status
@@ -1910,7 +1911,7 @@ func getRoleFromContext(c *gin.Context, logger *zap.Logger) (rbac.Role, bool) {
 }
 
 func getUserIDFromContext(c *gin.Context) *string {
-	if userID, exists := c.Get(UsernameContextKey); exists {
+	if userID, exists := c.Get(UserIDContextKey); exists {
 		if uid, ok := userID.(string); ok && uid != "" {
 			return &uid
 		}
@@ -2009,6 +2010,19 @@ func prepareIncidentCreate(
 		return false
 	}
 
+	role, ok := getRoleFromContext(c, logger)
+	if !ok {
+		return false
+	}
+
+	if role.IsReporter() && !isSystemIncident(*incData) {
+		logger.Warn("incident creation denied: reporter role may only create system incidents",
+			zap.String("type", incData.Type),
+		)
+		apiErrors.RaiseForbiddenErr(c, apiErrors.ErrInsufficientRole)
+		return false
+	}
+
 	if incData.Type == event.TypeMaintenance {
 		if err := validateMaintenanceCreation(*incData); err != nil {
 			apiErrors.RaiseBadRequestErr(c, err)
@@ -2019,10 +2033,6 @@ func prepareIncidentCreate(
 			return false
 		}
 
-		role, ok := getRoleFromContext(c, logger)
-		if !ok {
-			return false
-		}
 		status, err := resolveMaintenanceCreateStatus(role)
 		if err != nil {
 			apiErrors.RaiseForbiddenErr(c, err)
@@ -2052,6 +2062,12 @@ func resolveContactEmail(c *gin.Context, incData *IncidentData, pub *notificatio
 	}
 
 	return true
+}
+
+// isSystemIncident reports whether the payload is a machine-reported incident,
+// the only event shape a reporter role is allowed to create.
+func isSystemIncident(incData IncidentData) bool {
+	return incData.Type == event.TypeIncident && incData.System != nil && *incData.System
 }
 
 func prepareIncidentPatch(

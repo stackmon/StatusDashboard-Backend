@@ -50,9 +50,9 @@ func initRoutes(t *testing.T, c *gin.Engine, dbInst *db.DB, log *zap.Logger) {
 		v2Api.POST("component_status", PostComponentHandler(dbInst, log))
 
 		// Incidents routes (deprecated)
-		v2Api.GET("incidents", GetIncidentsHandler(dbInst, log, rbac.New("", "operators", "")))
+		v2Api.GET("incidents", GetIncidentsHandler(dbInst, log, rbac.New(rbac.Config{Operators: "operators"})))
 		v2Api.POST("incidents", PostIncidentHandler(dbInst, log))
-		v2Api.GET("incidents/:eventID", GetIncidentHandler(dbInst, log, rbac.New("", "operators", "")))
+		v2Api.GET("incidents/:eventID", GetIncidentHandler(dbInst, log, rbac.New(rbac.Config{Operators: "operators"})))
 		v2Api.PATCH("incidents/:eventID",
 			EventExistenceCheckForTests(dbInst, log),
 			setAdminRole,
@@ -63,9 +63,9 @@ func initRoutes(t *testing.T, c *gin.Engine, dbInst *db.DB, log *zap.Logger) {
 		)
 
 		// Events routes (new endpoints)
-		v2Api.GET("events", GetEventsHandler(dbInst, log, rbac.New("", "operators", "")))
+		v2Api.GET("events", GetEventsHandler(dbInst, log, rbac.New(rbac.Config{Operators: "operators"})))
 		v2Api.POST("events", PostIncidentHandler(dbInst, log))
-		v2Api.GET("events/:eventID", GetIncidentHandler(dbInst, log, rbac.New("", "operators", "")))
+		v2Api.GET("events/:eventID", GetIncidentHandler(dbInst, log, rbac.New(rbac.Config{Operators: "operators"})))
 		v2Api.PATCH("events/:eventID",
 			EventExistenceCheckForTests(dbInst, log),
 			setAdminRole,

@@ -17,11 +17,10 @@ func baseAppConfig() *conf.Config {
 	return &conf.Config{
 		DB:              databaseURL,
 		Port:            "8000",
-		Hostname:        "localhost",
 		WebURL:          "https://status.example.com",
-		SecretKeyV1:     testHMACSecret,
+		OIDC:            conf.OIDC{Issuer: testIDP.server.URL, ClientID: testClientID},
 		OpenAPISpecPath: "../openapi.yaml",
-		RBAC:            conf.RBACConfig{Creators: creatorGroup, Operators: operatorGroup, Admins: adminGroup},
+		RBAC:            conf.RBACConfig{Creators: creatorRole, Operators: operatorRole, Admins: adminRole},
 	}
 }
 

@@ -26,8 +26,6 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/api"
 	"github.com/stackmon/otc-status-dashboard/internal/api/auth"
 	apiErrors "github.com/stackmon/otc-status-dashboard/internal/api/errors"
-	"github.com/stackmon/otc-status-dashboard/internal/api/rbac"
-	v1 "github.com/stackmon/otc-status-dashboard/internal/api/v1"
 	v2 "github.com/stackmon/otc-status-dashboard/internal/api/v2"
 	"github.com/stackmon/otc-status-dashboard/internal/conf"
 	"github.com/stackmon/otc-status-dashboard/internal/db"
@@ -64,15 +62,22 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	// Only set up cleanup if container was created successfully
+	mappedPort, errPort := container.MappedPort(ctx, "5432/tcp")
+	if errPort != nil {
+		log.Printf("failed to resolve the mapped postgres port: %s", errPort)
+		if errTerm := testcontainers.TerminateContainer(container); errTerm != nil {
+			log.Printf("failed to terminate container: %s", errTerm)
+		}
+		os.Exit(1)
+	}
+	port := mappedPort.Port()
+
+	// Only set up cleanup once the container is reachable
 	defer func() {
 		if err = testcontainers.TerminateContainer(container); err != nil {
 			log.Printf("failed to terminate container: %s", err)
 		}
 	}()
-
-	ports, _ := container.Ports(ctx)
-	port := ports["5432/tcp"][0].HostPort
 	databaseURL = fmt.Sprintf(databaseURL, dbUser, dbPassword, port, dbName)
 
 	// Apply migrations (add sslmode=disable for test container)
@@ -81,6 +86,8 @@ func TestMain(m *testing.M) {
 		log.Printf("failed to apply migrations: %s", err)
 		return
 	}
+
+	defer testIDP.server.Close()
 
 	m.Run()
 }
@@ -107,7 +114,7 @@ func applyMigrations(dbURL string) error {
 	return nil
 }
 
-func initTests(t *testing.T) (*gin.Engine, *db.DB, *auth.Provider) {
+func initTests(t *testing.T) *gin.Engine {
 	t.Helper()
 	t.Log("init structs")
 
@@ -125,130 +132,91 @@ func initTests(t *testing.T) (*gin.Engine, *db.DB, *auth.Provider) {
 
 	logger, _ := zap.NewDevelopment()
 
-	// Provide RBAC group names and local HMAC secret so conf.Validate() passes.
-	t.Setenv("SD_SECRET_KEY", testHMACSecret)
-	t.Setenv("SD_RBAC_GROUPS_CREATORS", creatorGroup)
-	t.Setenv("SD_RBAC_GROUPS_OPERATORS", operatorGroup)
-	t.Setenv("SD_RBAC_GROUPS_ADMINS", adminGroup)
+	authn := testIDP.provider(t, testRBACService().RoleNames()...)
 
-	cfg, err := conf.LoadConf()
-	require.NoError(t, err)
+	initRoutesV2(t, r, d, authn, logger)
 
-	// Create Keycloak provider only when configured (mirrors production api.go logic).
-	var oa2Prov *auth.Provider
-	if cfg.Keycloak != nil && cfg.Keycloak.URL != "" {
-		oa2Prov, err = auth.NewProvider(cfg.Keycloak.URL, cfg.Keycloak.Realm, cfg.Keycloak.ClientID, cfg.Keycloak.ClientSecret, cfg.Hostname, cfg.WebURL)
-		require.NoError(t, err)
-	}
-
-	initRoutesAuth(t, r, oa2Prov, logger)
-	initRoutesV1(t, r, d, oa2Prov, logger)
-	initRoutesV2(t, r, d, oa2Prov, logger)
-
-	return r, d, oa2Prov
+	return r
 }
 
-func initRoutesAuth(t *testing.T, c *gin.Engine, oa2Prov *auth.Provider, logger *zap.Logger) {
-	t.Helper()
-	if oa2Prov == nil {
-		t.Log("skipping auth routes: no Keycloak provider configured")
-		return
-	}
-	t.Log("init routes for auth")
-
-	authAPI := c.Group("auth")
-
-	authAPI.GET("login", auth.GetLoginPageHandler(oa2Prov, logger))
-	authAPI.GET("callback", auth.GetCallbackHandler(oa2Prov, logger))
-	authAPI.POST("token", auth.PostTokenHandler(oa2Prov, logger))
-	authAPI.POST("logout", auth.PostTokenHandler(oa2Prov, logger))
-}
-
-func initRoutesV1(t *testing.T, c *gin.Engine, dbInst *db.DB, prov *auth.Provider, logger *zap.Logger) {
-	t.Helper()
-	t.Log("init routes for V1")
-
-	v1Api := c.Group("v1")
-
-	v1Api.GET("component_status", v1.GetComponentsStatusHandler(dbInst, logger))
-	v1Api.POST("component_status",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
-		v1.PostComponentStatusHandler(dbInst, logger))
-
-	v1Api.GET("incidents", v1.GetIncidentsHandler(dbInst, logger))
-}
-
-func initRoutesV2(t *testing.T, c *gin.Engine, dbInst *db.DB, prov *auth.Provider, logger *zap.Logger) {
+func initRoutesV2(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Provider, logger *zap.Logger) {
 	t.Helper()
 	t.Log("init routes for V2")
 
-	rbacSvc := rbac.New(creatorGroup, operatorGroup, adminGroup)
+	rbacSvc := testRBACService()
 
 	v2Api := c.Group("v2")
 
 	v2Api.GET("components", v2.GetComponentsHandler(dbInst, logger))
 	v2Api.POST("components",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		v2.PostComponentHandler(dbInst, logger))
 	v2Api.GET("components/:id", v2.GetComponentHandler(dbInst, logger))
 
 	// Incidents routes (deprecated).
 	v2Api.GET("incidents",
-		api.SetJWTClaims(prov, logger, testHMACSecret),
+		api.SetJWTClaims(authn, logger),
 		v2.GetIncidentsHandler(dbInst, logger, rbacSvc))
 	v2Api.POST("incidents",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.ValidateComponentsMW(dbInst, logger),
 		v2.PostIncidentHandler(dbInst, logger))
 	v2Api.GET("incidents/:eventID",
-		api.SetJWTClaims(prov, logger, testHMACSecret),
+		api.SetJWTClaims(authn, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		v2.GetIncidentHandler(dbInst, logger, rbacSvc))
 	v2Api.PATCH("incidents/:eventID",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		v2.PatchIncidentHandler(dbInst, logger))
 	v2Api.POST("incidents/:eventID/extract",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		api.ValidateComponentsMW(dbInst, logger),
 		v2.PostIncidentExtractHandler(dbInst, logger))
 	v2Api.PATCH("incidents/:eventID/updates/:updateID",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		v2.PatchEventUpdateTextHandler(dbInst, logger))
 
 	// Events routes.
 	v2Api.GET("events",
-		api.SetJWTClaims(prov, logger, testHMACSecret),
+		api.SetJWTClaims(authn, logger),
 		v2.GetEventsHandler(dbInst, logger, rbacSvc))
 	v2Api.POST("events",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.ValidateComponentsMW(dbInst, logger),
 		v2.PostIncidentHandler(dbInst, logger))
 	v2Api.GET("events/:eventID",
-		api.SetJWTClaims(prov, logger, testHMACSecret),
+		api.SetJWTClaims(authn, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		v2.GetIncidentHandler(dbInst, logger, rbacSvc))
 	v2Api.PATCH("events/:eventID",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		v2.PatchIncidentHandler(dbInst, logger))
 	v2Api.POST("events/:eventID/extract",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		api.ValidateComponentsMW(dbInst, logger),
 		v2.PostIncidentExtractHandler(dbInst, logger))
 	v2Api.PATCH("events/:eventID/updates/:updateID",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(dbInst, logger),
 		v2.PatchEventUpdateTextHandler(dbInst, logger))
 
@@ -269,30 +237,4 @@ func truncateIncidents(t *testing.T) {
 	require.NoError(t, err, "failed to get sql.DB from gorm for closing")
 	err = sqlDB.Close()
 	require.NoError(t, err, "failed to close gorm connection for truncation")
-}
-
-// restoreFixtureIncident re-inserts the dump_test.sql fixture incident
-// so that V1 GET tests see the expected data even after other tests modify the DB.
-func restoreFixtureIncident(t *testing.T) {
-	t.Helper()
-	truncateIncidents(t)
-
-	gormDB, err := gorm.Open(gormpostgres.Open(databaseURL), &gorm.Config{})
-	require.NoError(t, err)
-
-	sqls := []string{
-		`INSERT INTO incident (id, text, start_date, end_date, impact, type, system, status)
-		 VALUES (1, 'Closed incident without any update', '2025-05-22 10:12:42', '2025-05-22 11:12:42', 1, 'incident', true, 'resolved')`,
-		`INSERT INTO incident_component_relation (incident_id, component_id) VALUES (1, 1)`,
-		`INSERT INTO incident_status (incident_id, "timestamp", text, status)
-		 VALUES (1, '2025-05-22 11:12:42', 'close incident', 'resolved')`,
-		`SELECT setval('incident_id_seq', (SELECT COALESCE(MAX(id), 0) FROM incident))`,
-	}
-	for _, s := range sqls {
-		require.NoError(t, gormDB.Exec(s).Error)
-	}
-
-	sqlDB, err := gormDB.DB()
-	require.NoError(t, err)
-	require.NoError(t, sqlDB.Close())
 }

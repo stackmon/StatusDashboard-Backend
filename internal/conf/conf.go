@@ -19,15 +19,9 @@ const osPref = "SD"
 const DevelopMode = "devel"
 
 const (
-	DefaultWebURL          = "http://localhost:9000"
-	DefaultHostname        = "localhost"
 	DefaultPort            = "8000"
 	DefaultMetricsPort     = "9090"
 	DefaultOpenAPISpecPath = "openapi.yaml"
-
-	// MinSecretKeyLength is the minimum required length for the HMAC secret key.
-	// HMAC-SHA256 requires at least 32 bytes for cryptographic strength.
-	MinSecretKeyLength = 32
 
 	// MaxPortNumber is the highest valid TCP port.
 	MaxPortNumber = 65535
@@ -41,6 +35,13 @@ const (
 	DefaultBackoffInterval = "5m"
 )
 
+// Static proxy defaults. The byte budget keeps a wide margin below the memory
+// limit of the deployment that runs this process.
+const (
+	DefaultStaticCacheTTL      = "5m"
+	DefaultStaticCacheMaxBytes = "67108864"
+)
+
 type Config struct {
 	// Single-word fields below carry no envconfig tag on purpose: envconfig falls back
 	// to the bare tag name when the prefixed variable is unset, so a tag of "HOSTNAME"
@@ -51,24 +52,18 @@ type Config struct {
 	DB string
 	// Cache connection uri
 	// It can be redis format or internal
-	Cache string
-	// Keycloak settings
-	Keycloak *Keycloak `envconfig:"KEYCLOAK"`
+	Cache string `envconfig:"CACHE"`
+	OIDC  OIDC   `envconfig:"OIDC"`
 	// Log level for verbosity
 	LogLevel string `envconfig:"LOG_LEVEL"`
 	// App port
-	Port string
+	Port string `envconfig:"PORT"`
 	// MetricsPort serves /metrics on its own listener so the queue telemetry is not
 	// reachable from the public API port.
 	MetricsPort string `envconfig:"METRICS_PORT"`
-	// Hostname for the app, used to generate a callback URL for keycloak
-	// Example: https://api.example.com
-	Hostname string
-	// Web URL for the app
+	// Web URL for the app, used to build maintenance deep links in notifications.
 	// Example: https://web.example.com
 	WebURL string `envconfig:"WEB_URL"`
-	// Secret key for local HMAC authentication (dev, tests, service-to-service)
-	SecretKeyV1 string `envconfig:"SECRET_KEY"`
 	// OpenAPISpecPath is the filesystem path to the OpenAPI spec served at
 	// /openapi.json. Defaults to "openapi.yaml" (resolved relative to the
 	// process working directory, matching the container's WORKDIR layout).
@@ -80,6 +75,8 @@ type Config struct {
 	SMTP SMTPConfig `envconfig:"SMTP"`
 	// Notifications feature settings
 	Notifications NotificationsConfig `envconfig:"NOTIFICATIONS"`
+	// Static site proxy and cache
+	Static Static `envconfig:"STATIC"`
 }
 
 // SMTPConfig holds the direct OTC SMTP transport settings.
@@ -122,19 +119,34 @@ type NotificationsConfig struct {
 }
 
 type RBACConfig struct {
-	// Creators group name
-	Creators string `envconfig:"GROUPS_CREATORS"`
-	// Operators group name
-	Operators string `envconfig:"GROUPS_OPERATORS"`
-	// Admins group name (mandatory)
-	Admins string `envconfig:"GROUPS_ADMINS"`
+	// Creators role name
+	Creators string `envconfig:"ROLES_CREATORS"`
+	// Operators role name
+	Operators string `envconfig:"ROLES_OPERATORS"`
+	// Admins role name (mandatory)
+	Admins string `envconfig:"ROLES_ADMINS"`
+	// Reporters role name. Machine principals mapped here may only create
+	// system incidents via POST /v2/events.
+	Reporters string `envconfig:"ROLES_REPORTERS"`
 }
 
-type Keycloak struct {
-	URL          string `envconfig:"URL"`
-	Realm        string `envconfig:"REALM"`
-	ClientID     string `envconfig:"CLIENT_ID"`
-	ClientSecret string `envconfig:"CLIENT_SECRET"`
+// OIDC configures the external identity provider (Zitadel).
+type OIDC struct {
+	Issuer        string `envconfig:"ISSUER"`
+	ClientID      string `envconfig:"CLIENT_ID"`
+	UsernameClaim string `envconfig:"USERNAME_CLAIM"`
+}
+
+// Static configures the proxy that serves the status dashboard static site from
+// the OBS website endpoints for every path the API does not own.
+type Static struct {
+	// Origins are the OBS website endpoints, primary first, each one a bare
+	// hostname without scheme or path. An empty list disables the proxy.
+	Origins string `envconfig:"ORIGINS"`
+	// CacheTTL applies when an origin response carries no usable Cache-Control.
+	CacheTTL string `envconfig:"CACHE_TTL"`
+	// CacheMaxBytes bounds the total size of the in-memory response cache.
+	CacheMaxBytes string `envconfig:"CACHE_MAX_BYTES"`
 }
 
 func (c *Config) Validate() error {
@@ -150,8 +162,8 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	if provErr := c.validateProviders(); provErr != nil {
-		return provErr
+	if c.OIDC.Issuer == "" || c.OIDC.ClientID == "" {
+		return fmt.Errorf("SD_OIDC_ISSUER and SD_OIDC_CLIENT_ID are required")
 	}
 
 	if rbacErr := c.RBAC.Validate(); rbacErr != nil {
@@ -160,6 +172,10 @@ func (c *Config) Validate() error {
 
 	if notifErr := c.validateNotifications(); notifErr != nil {
 		return notifErr
+	}
+
+	if staticErr := c.Static.Validate(); staticErr != nil {
+		return staticErr
 	}
 
 	return nil
@@ -304,29 +320,86 @@ func validateEmailList(envName, raw string) error {
 	return nil
 }
 
-// validateProviders ensures at least one authentication provider is configured.
-func (c *Config) validateProviders() error {
-	hasKeycloak := c.Keycloak != nil && c.Keycloak.URL != "" && c.Keycloak.Realm != "" &&
-		c.Keycloak.ClientID != "" && c.Keycloak.ClientSecret != ""
-	hasLocal := c.SecretKeyV1 != ""
-
-	if !hasKeycloak && !hasLocal {
-		return fmt.Errorf("at least one authentication provider must be configured: " +
-			"set SD_KEYCLOAK_* for Keycloak or SD_SECRET_KEY for local HMAC")
-	}
-
-	if hasLocal && len(c.SecretKeyV1) < MinSecretKeyLength {
-		return fmt.Errorf("SD_SECRET_KEY must be at least %d characters for HMAC-SHA256 security", MinSecretKeyLength)
-	}
-
-	return nil
-}
 
 func (r *RBACConfig) Validate() error {
 	if r.Admins == "" {
-		return fmt.Errorf("SD_RBAC_GROUPS_ADMINS is required")
+		return fmt.Errorf("SD_RBAC_ROLES_ADMINS is required")
 	}
 	return nil
+}
+
+// Validate rejects a static proxy configuration the proxy cannot use.
+func (s *Static) Validate() error {
+	origins, err := s.OriginList()
+	if err != nil {
+		return err
+	}
+
+	// A proxy without origins is disabled, so the cache settings are unused.
+	if len(origins) == 0 {
+		return nil
+	}
+
+	if _, err = s.TTL(); err != nil {
+		return err
+	}
+
+	_, err = s.MaxBytes()
+
+	return err
+}
+
+// OriginList returns the OBS website endpoints in failover order. The list is
+// empty when the static proxy is disabled.
+func (s *Static) OriginList() ([]string, error) {
+	fields := strings.Split(s.Origins, ",")
+
+	origins := make([]string, 0, len(fields))
+
+	for _, field := range fields {
+		origin := strings.TrimSpace(field)
+		if origin == "" {
+			continue
+		}
+
+		if strings.ContainsAny(origin, "/?#@: \t") {
+			return nil, fmt.Errorf(
+				"wrong SD_STATIC_ORIGINS entry %q, expected a bare hostname without scheme, path or port",
+				origin)
+		}
+
+		origins = append(origins, origin)
+	}
+
+	return origins, nil
+}
+
+// TTL is the cache lifetime applied to responses that carry no Cache-Control.
+func (s *Static) TTL() (time.Duration, error) {
+	ttl, err := time.ParseDuration(s.CacheTTL)
+	if err != nil {
+		return 0, fmt.Errorf("wrong SD_STATIC_CACHE_TTL format, expected a Go duration such as 5m: %w", err)
+	}
+
+	if ttl <= 0 {
+		return 0, fmt.Errorf("wrong SD_STATIC_CACHE_TTL value, expected a positive duration")
+	}
+
+	return ttl, nil
+}
+
+// MaxBytes is the size of the whole response cache.
+func (s *Static) MaxBytes() (int64, error) {
+	maxBytes, err := strconv.ParseInt(s.CacheMaxBytes, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("wrong SD_STATIC_CACHE_MAX_BYTES format, expected a number of bytes: %w", err)
+	}
+
+	if maxBytes <= 0 {
+		return 0, fmt.Errorf("wrong SD_STATIC_CACHE_MAX_BYTES value, expected a positive byte budget")
+	}
+
+	return maxBytes, nil
 }
 
 func (c *Config) FillDefaults() {
@@ -340,14 +413,6 @@ func (c *Config) FillDefaults() {
 
 	if c.MetricsPort == "" {
 		c.MetricsPort = DefaultMetricsPort
-	}
-
-	if c.Hostname == "" {
-		c.Hostname = DefaultHostname
-	}
-
-	if c.WebURL == "" {
-		c.WebURL = DefaultWebURL
 	}
 
 	if c.OpenAPISpecPath == "" {
@@ -367,6 +432,14 @@ func (c *Config) FillDefaults() {
 		if c.Notifications.BackoffInterval == "" {
 			c.Notifications.BackoffInterval = DefaultBackoffInterval
 		}
+	}
+
+	if c.Static.CacheTTL == "" {
+		c.Static.CacheTTL = DefaultStaticCacheTTL
+	}
+
+	if c.Static.CacheMaxBytes == "" {
+		c.Static.CacheMaxBytes = DefaultStaticCacheMaxBytes
 	}
 }
 
@@ -411,7 +484,7 @@ func envKeyPart(field reflect.StructField) string {
 
 // mergeConfigs allow to merge config params from env variables and .env file.
 // It checks the Config struct and if the value is missing, it set up the value from .env file.
-func mergeConfigs(env map[string]string, obj any, prefix string) error { //nolint:gocognit
+func mergeConfigs(env map[string]string, obj any, prefix string) error {
 	if env == nil {
 		return nil
 	}
@@ -434,18 +507,7 @@ func mergeConfigs(env map[string]string, obj any, prefix string) error { //nolin
 		field := t.Field(i)
 		value := v.Field(i)
 
-		// Handle pointer to struct (e.g., *Keycloak)
-		if value.Kind() == reflect.Ptr && value.Elem().Kind() == reflect.Struct {
-			confPrefix := fmt.Sprintf("%s_%s", prefix, envKeyPart(field))
-			err := mergeConfigs(env, value.Interface(), confPrefix)
-			if err != nil {
-				return err
-			}
-
-			continue
-		}
-
-		// Handle embedded struct (e.g., RBACConfig)
+		// Handle embedded struct (e.g., RBACConfig or OIDC)
 		// For struct values (not pointers), we need to pass a pointer
 		if value.Kind() == reflect.Struct {
 			confPrefix := fmt.Sprintf("%s_%s", prefix, envKeyPart(field))
@@ -476,6 +538,7 @@ func mergeConfigs(env map[string]string, obj any, prefix string) error { //nolin
 	return nil
 }
 
+// maskSecret hides a secret value in logs, keeping an empty value empty.
 func maskSecret(s string) string {
 	if s == "" {
 		return ""
@@ -502,18 +565,23 @@ func (c *Config) Log(logger *zap.Logger) {
 	logger.Info("Application starting with the following configuration:")
 
 	logger.Info("Endpoint configuration",
-		zap.String("hostname", c.Hostname),
 		zap.String("port", c.Port),
-		zap.String("web_url", c.WebURL),
+	)
+
+	logger.Info("Static site configuration",
+		zap.String("origins", c.Static.Origins),
+		zap.String("cache_ttl", c.Static.CacheTTL),
+		zap.String("cache_max_bytes", c.Static.CacheMaxBytes),
 	)
 
 	logger.Info("Authentication configuration",
-		zap.Bool("keycloak_configured", c.Keycloak != nil && c.Keycloak.URL != ""),
-		zap.Bool("local_hmac_configured", c.SecretKeyV1 != ""),
-		zap.String("creators_group", c.RBAC.Creators),
-		zap.String("operators_group", c.RBAC.Operators),
-		zap.String("admins_group", c.RBAC.Admins),
-		zap.String("secret_key_v1", maskSecret(c.SecretKeyV1)),
+		zap.String("issuer", c.OIDC.Issuer),
+		zap.String("client_id", c.OIDC.ClientID),
+		zap.String("username_claim", c.OIDC.UsernameClaim),
+		zap.String("creators_role", c.RBAC.Creators),
+		zap.String("operators_role", c.RBAC.Operators),
+		zap.String("admins_role", c.RBAC.Admins),
+		zap.String("reporters_role", c.RBAC.Reporters),
 	)
 
 	logger.Info("Storage and logging configuration",
@@ -522,15 +590,6 @@ func (c *Config) Log(logger *zap.Logger) {
 		zap.String("log_level", c.LogLevel),
 		zap.String("openapi_spec_path", c.OpenAPISpecPath),
 	)
-
-	if c.Keycloak != nil {
-		logger.Info("Keycloak configuration",
-			zap.String("url", c.Keycloak.URL),
-			zap.String("realm", c.Keycloak.Realm),
-			zap.String("client_id", c.Keycloak.ClientID),
-			zap.String("client_secret", maskSecret(c.Keycloak.ClientSecret)),
-		)
-	}
 
 	logger.Info("Notifications configuration",
 		zap.Bool("enabled", c.Notifications.Enabled),

@@ -10,13 +10,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/stackmon/otc-status-dashboard/internal/api"
-	"github.com/stackmon/otc-status-dashboard/internal/api/auth"
 	apiErrors "github.com/stackmon/otc-status-dashboard/internal/api/errors"
 	"github.com/stackmon/otc-status-dashboard/internal/api/rbac"
 	v2 "github.com/stackmon/otc-status-dashboard/internal/api/v2"
@@ -26,16 +24,29 @@ import (
 )
 
 const (
-	testHMACSecret = "test-secret-key-for-rbac-tests!!"
-
-	creatorGroup  = "sd_creators"
-	operatorGroup = "sd_operators"
-	adminGroup    = "sd_admins"
+	creatorRole  = "sd_creators"
+	operatorRole = "sd_operators"
+	adminRole    = "sd_admins"
+	reporterRole = "sd_reporters"
+	// unmappedRole is a valid project role in Zitadel that the backend does not
+	// map to any RBAC tier.
+	unmappedRole = "sd_readers"
 )
 
-// initTestsWithHMAC sets up a router with RBAC middleware using HMAC-signed
-// JWTs. Does not require Keycloak or environment variables.
-func initTestsWithHMAC(t *testing.T) *gin.Engine {
+// testRBACService builds the RBAC service with the same role mapping as the
+// production configuration, including the reporter tier.
+func testRBACService() *rbac.Service {
+	return rbac.New(rbac.Config{
+		Creators:  creatorRole,
+		Operators: operatorRole,
+		Admins:    adminRole,
+		Reporters: reporterRole,
+	})
+}
+
+// initRBACTests sets up a router with the RBAC protected v2 routes and the
+// role mapping of the production configuration.
+func initRBACTests(t *testing.T) *gin.Engine {
 	t.Helper()
 
 	d, err := db.New(&conf.Config{DB: databaseURL})
@@ -47,63 +58,52 @@ func initTestsWithHMAC(t *testing.T) *gin.Engine {
 	r.Use(api.ErrorHandle())
 
 	logger, _ := zap.NewDevelopment()
-	prov := &auth.Provider{}
-	rbacSvc := rbac.New(creatorGroup, operatorGroup, adminGroup)
+	authn := testIDP.provider(t, testRBACService().RoleNames()...)
+	rbacSvc := testRBACService()
 
 	v2Api := r.Group("v2")
 
 	v2Api.GET("events",
-		api.SetJWTClaims(prov, logger, testHMACSecret),
+		api.SetJWTClaims(authn, logger),
 		v2.GetEventsHandler(d, logger, rbacSvc))
 	v2Api.POST("events",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.ValidateComponentsMW(d, logger),
 		v2.PostIncidentHandler(d, logger))
 	v2Api.GET("events/:eventID",
-		api.SetJWTClaims(prov, logger, testHMACSecret),
+		api.SetJWTClaims(authn, logger),
 		api.CheckEventExistenceMW(d, logger),
 		v2.GetIncidentHandler(d, logger, rbacSvc))
 	v2Api.PATCH("events/:eventID",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(d, logger),
 		v2.PatchIncidentHandler(d, logger))
 	v2Api.POST("events/:eventID/extract",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(d, logger),
 		api.ValidateComponentsMW(d, logger),
 		v2.PostIncidentExtractHandler(d, logger))
+	v2Api.POST("components",
+		api.AuthenticationMW(authn, logger),
+		api.DenyReporterScopeMW(rbacSvc, logger),
+		v2.PostComponentHandler(d, logger))
 
 	return r
 }
 
-// tokenForRole creates a signed HMAC JWT for the given user/groups.
-func tokenForRole(userID string, groups ...string) string {
-	ifaceGroups := make([]interface{}, len(groups))
-	for i, g := range groups {
-		ifaceGroups[i] = g
-	}
-	claims := jwt.MapClaims{
-		"preferred_username": userID,
-		"groups":             ifaceGroups,
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString([]byte(testHMACSecret))
-	if err != nil {
-		panic(fmt.Sprintf("failed to sign test token: %v", err))
-	}
-	return signed
-}
-
-// Pre-built tokens for each role used across RBAC tests.
+// Tokens for each role used across the RBAC tests.
 var (
-	adminToken    = tokenForRole("admin-user", adminGroup)
-	operatorToken = tokenForRole("operator-user", operatorGroup)
-	creatorTokenA = tokenForRole("user-a", creatorGroup)
-	creatorTokenB = tokenForRole("user-b", creatorGroup)
-	noRoleToken   = tokenForRole("norole-user", "some_other_group")
+	adminToken    = tokenForRole("admin-user", adminRole)
+	operatorToken = tokenForRole("operator-user", operatorRole)
+	creatorTokenA = tokenForRole("user-a", creatorRole)
+	creatorTokenB = tokenForRole("user-b", creatorRole)
+	reporterToken = tokenForRole("reporter-user", reporterRole)
+	noRoleToken   = tokenForRole("norole-user", unmappedRole)
 )
 
 // ---------------------------------------------------------------------------

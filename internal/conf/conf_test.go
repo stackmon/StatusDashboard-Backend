@@ -2,10 +2,13 @@ package conf
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestRBACConfig_Validate(t *testing.T) {
@@ -16,7 +19,7 @@ func TestRBACConfig_Validate(t *testing.T) {
 		errSubstr string
 	}{
 		{
-			name: "All groups configured",
+			name: "All roles configured",
 			config: RBACConfig{
 				Creators:  "sd_creators",
 				Operators: "sd_operators",
@@ -35,16 +38,16 @@ func TestRBACConfig_Validate(t *testing.T) {
 			name:      "Missing Admins fails validation",
 			config:    RBACConfig{},
 			expectErr: true,
-			errSubstr: "SD_RBAC_GROUPS_ADMINS",
+			errSubstr: "SD_RBAC_ROLES_ADMINS",
 		},
 		{
-			name: "Missing Admins but other groups set fails",
+			name: "Missing Admins but other roles set fails",
 			config: RBACConfig{
 				Creators:  "sd_creators",
 				Operators: "sd_operators",
 			},
 			expectErr: true,
-			errSubstr: "SD_RBAC_GROUPS_ADMINS",
+			errSubstr: "SD_RBAC_ROLES_ADMINS",
 		},
 	}
 
@@ -63,54 +66,134 @@ func TestRBACConfig_Validate(t *testing.T) {
 
 func TestConfig_Validate_PropagatesRBACError(t *testing.T) {
 	cfg := &Config{
-		Port:        "8000",
-		SecretKeyV1: "test-secret-key-minimum-length!!", // 32 chars
-		RBAC:        RBACConfig{},
+		Port: "8000",
+		OIDC: OIDC{
+			Issuer:   "https://zitadel.example.com",
+			ClientID: "status-dashboard",
+		},
+		RBAC: RBACConfig{},
 	}
 
 	err := cfg.Validate()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "SD_RBAC_GROUPS_ADMINS")
+	assert.Contains(t, err.Error(), "SD_RBAC_ROLES_ADMINS")
 }
 
-func TestConfig_Validate_RequiresProvider(t *testing.T) {
+func TestConfig_Validate_PropagatesStaticError(t *testing.T) {
+	cfg := &Config{
+		Port: "8000",
+		OIDC: OIDC{
+			Issuer:   "https://zitadel.example.com",
+			ClientID: "status-dashboard",
+		},
+		RBAC:   RBACConfig{Admins: "sd_admins"},
+		Static: Static{Origins: "a.obs.example.com", CacheTTL: "5m", CacheMaxBytes: "0"},
+	}
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SD_STATIC_CACHE_MAX_BYTES")
+}
+
+func TestConfig_Validate_AcceptsDefaultStaticSettings(t *testing.T) {
+	cfg := &Config{
+		Port: "8000",
+		OIDC: OIDC{Issuer: "https://zitadel.example.com", ClientID: "status-dashboard"},
+		RBAC: RBACConfig{Admins: "sd_admins"},
+	}
+	cfg.FillDefaults()
+
+	require.NoError(t, cfg.Validate())
+}
+
+func TestStatic_Validate(t *testing.T) {
+	valid := Static{CacheTTL: "5m", CacheMaxBytes: "67108864"}
+
 	tests := []struct {
 		name      string
-		cfg       Config
+		cfg       Static
 		expectErr bool
 		errSubstr string
 	}{
 		{
-			name: "No provider configured fails",
-			cfg: Config{
-				Port: "8000",
-				RBAC: RBACConfig{Admins: "sd_admins"},
-			},
+			name: "Proxy disabled without origins",
+			cfg:  Static{},
+		},
+		{
+			name: "Unused cache settings are ignored while the proxy is disabled",
+			cfg:  Static{CacheTTL: "5 minutes", CacheMaxBytes: "0"},
+		},
+		{
+			name: "Configured origins with usable cache settings",
+			cfg:  valid,
+		},
+		{
+			name: "Several origins in failover order",
+			cfg:  Static{Origins: "a.obs.example.com,b.obs.example.com", CacheTTL: "1m", CacheMaxBytes: "1024"},
+		},
+		{
+			name: "Empty entries between origins are ignored",
+			cfg:  Static{Origins: ",a.obs.example.com, ,", CacheTTL: "1m", CacheMaxBytes: "1024"},
+		},
+		{
+			name:      "Origin with a scheme",
+			cfg:       Static{Origins: "https://a.obs.example.com", CacheTTL: "1m", CacheMaxBytes: "1024"},
 			expectErr: true,
-			errSubstr: "at least one authentication provider",
+			errSubstr: "SD_STATIC_ORIGINS",
 		},
 		{
-			name: "Local HMAC provider passes",
-			cfg: Config{
-				Port:        "8000",
-				SecretKeyV1: "my-secret-key-that-is-32-chars!!", // 32 chars
-				RBAC:        RBACConfig{Admins: "sd_admins"},
-			},
-			expectErr: false,
+			name:      "Origin with a path",
+			cfg:       Static{Origins: "a.obs.example.com/index.html", CacheTTL: "1m", CacheMaxBytes: "1024"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_ORIGINS",
 		},
 		{
-			name: "Keycloak provider passes",
-			cfg: Config{
-				Port: "8000",
-				Keycloak: &Keycloak{
-					URL:          "https://kc.example.com",
-					Realm:        "myrealm",
-					ClientID:     "client",
-					ClientSecret: "secret",
-				},
-				RBAC: RBACConfig{Admins: "sd_admins"},
-			},
-			expectErr: false,
+			name:      "Origin with a port",
+			cfg:       Static{Origins: "a.obs.example.com:443", CacheTTL: "1m", CacheMaxBytes: "1024"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_ORIGINS",
+		},
+		{
+			name:      "Malformed duration",
+			cfg:       Static{Origins: "a.obs.example.com", CacheTTL: "5 minutes", CacheMaxBytes: "1024"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_CACHE_TTL",
+		},
+		{
+			name:      "Missing duration",
+			cfg:       Static{Origins: "a.obs.example.com", CacheMaxBytes: "1024"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_CACHE_TTL",
+		},
+		{
+			name:      "Zero duration",
+			cfg:       Static{Origins: "a.obs.example.com", CacheTTL: "0s", CacheMaxBytes: "1024"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_CACHE_TTL",
+		},
+		{
+			name:      "Negative duration",
+			cfg:       Static{Origins: "a.obs.example.com", CacheTTL: "-5m", CacheMaxBytes: "1024"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_CACHE_TTL",
+		},
+		{
+			name:      "Byte budget with a unit",
+			cfg:       Static{Origins: "a.obs.example.com", CacheTTL: "1m", CacheMaxBytes: "64MiB"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_CACHE_MAX_BYTES",
+		},
+		{
+			name:      "Zero byte budget",
+			cfg:       Static{Origins: "a.obs.example.com", CacheTTL: "1m", CacheMaxBytes: "0"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_CACHE_MAX_BYTES",
+		},
+		{
+			name:      "Negative byte budget",
+			cfg:       Static{Origins: "a.obs.example.com", CacheTTL: "1m", CacheMaxBytes: "-1024"},
+			expectErr: true,
+			errSubstr: "SD_STATIC_CACHE_MAX_BYTES",
 		},
 	}
 
@@ -127,45 +210,83 @@ func TestConfig_Validate_RequiresProvider(t *testing.T) {
 	}
 }
 
-func TestConfig_Validate_MinSecretKeyLength(t *testing.T) {
+func TestStatic_Accessors(t *testing.T) {
+	cfg := Static{
+		Origins:       " primary.obs.example.com , backup.obs.example.com ",
+		CacheTTL:      "90s",
+		CacheMaxBytes: "1048576",
+	}
+
+	origins, err := cfg.OriginList()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"primary.obs.example.com", "backup.obs.example.com"}, origins)
+
+	ttl, err := cfg.TTL()
+	require.NoError(t, err)
+	assert.Equal(t, 90*time.Second, ttl)
+
+	maxBytes, err := cfg.MaxBytes()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1048576), maxBytes)
+}
+
+func TestConfig_Validate_RequiresOIDC(t *testing.T) {
 	tests := []struct {
 		name      string
-		secret    string
+		cfg       Config
 		expectErr bool
 		errSubstr string
 	}{
 		{
-			name:      "Short secret fails",
-			secret:    "too-short",
-			expectErr: true,
-			errSubstr: "at least 32 characters",
-		},
-		{
-			name:      "31-char secret fails",
-			secret:    "1234567890123456789012345678901", // 31 chars
-			expectErr: true,
-			errSubstr: "at least 32 characters",
-		},
-		{
-			name:      "32-char secret passes",
-			secret:    "12345678901234567890123456789012", // 32 chars
+			name: "Issuer and client id pass",
+			cfg: Config{
+				Port: "8000",
+				OIDC: OIDC{
+					Issuer:   "https://zitadel.example.com",
+					ClientID: "status-dashboard",
+				},
+				RBAC: RBACConfig{Admins: "sd_admins"},
+			},
 			expectErr: false,
 		},
 		{
-			name:      "64-char secret passes",
-			secret:    "1234567890123456789012345678901234567890123456789012345678901234", // 64 chars
-			expectErr: false,
+			name: "No issuer and no client id fails",
+			cfg: Config{
+				Port: "8000",
+				RBAC: RBACConfig{Admins: "sd_admins"},
+			},
+			expectErr: true,
+			errSubstr: "SD_OIDC_ISSUER and SD_OIDC_CLIENT_ID",
+		},
+		{
+			name: "Issuer without client id fails",
+			cfg: Config{
+				Port: "8000",
+				OIDC: OIDC{
+					Issuer: "https://zitadel.example.com",
+				},
+				RBAC: RBACConfig{Admins: "sd_admins"},
+			},
+			expectErr: true,
+			errSubstr: "SD_OIDC_ISSUER and SD_OIDC_CLIENT_ID",
+		},
+		{
+			name: "Client id without issuer fails",
+			cfg: Config{
+				Port: "8000",
+				OIDC: OIDC{
+					ClientID: "status-dashboard",
+				},
+				RBAC: RBACConfig{Admins: "sd_admins"},
+			},
+			expectErr: true,
+			errSubstr: "SD_OIDC_ISSUER and SD_OIDC_CLIENT_ID",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := Config{
-				Port:        "8000",
-				SecretKeyV1: tc.secret,
-				RBAC:        RBACConfig{Admins: "admins"},
-			}
-			err := cfg.Validate()
+			err := tc.cfg.Validate()
 			if tc.expectErr {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.errSubstr)
@@ -178,8 +299,11 @@ func TestConfig_Validate_MinSecretKeyLength(t *testing.T) {
 
 func TestConfig_Validate_PortValidation(t *testing.T) {
 	base := Config{
-		SecretKeyV1: "secret-key-that-is-32-chars-long", // 32 chars
-		RBAC:        RBACConfig{Admins: "admins"},
+		OIDC: OIDC{
+			Issuer:   "https://zitadel.example.com",
+			ClientID: "status-dashboard",
+		},
+		RBAC: RBACConfig{Admins: "admins"},
 	}
 
 	tests := []struct {
@@ -218,30 +342,30 @@ func TestFillDefaults(t *testing.T) {
 
 		assert.Equal(t, DevelopMode, c.LogLevel)
 		assert.Equal(t, DefaultPort, c.Port)
-		assert.Equal(t, DefaultHostname, c.Hostname)
-		assert.Equal(t, DefaultWebURL, c.WebURL)
+		assert.Equal(t, DefaultOpenAPISpecPath, c.OpenAPISpecPath)
+		assert.Equal(t, DefaultStaticCacheTTL, c.Static.CacheTTL)
+		assert.Equal(t, DefaultStaticCacheMaxBytes, c.Static.CacheMaxBytes)
 	})
 
 	t.Run("preserves existing values", func(t *testing.T) {
 		c := &Config{
-			LogLevel: "info",
-			Port:     "9090",
-			Hostname: "api.example.com",
-			WebURL:   "https://web.example.com",
+			LogLevel:        "info",
+			Port:            "9090",
+			OpenAPISpecPath: "custom.yaml",
+			RBAC:            RBACConfig{Creators: "sd_creators", Admins: "sd_admins"},
+			Static:          Static{Origins: "a.obs.example.com", CacheTTL: "1m", CacheMaxBytes: "4096"},
 		}
 		c.FillDefaults()
 
 		assert.Equal(t, "info", c.LogLevel)
 		assert.Equal(t, "9090", c.Port)
-		assert.Equal(t, "api.example.com", c.Hostname)
-		assert.Equal(t, "https://web.example.com", c.WebURL)
+		assert.Equal(t, "custom.yaml", c.OpenAPISpecPath)
+		assert.Equal(t, "sd_creators", c.RBAC.Creators)
+		assert.Equal(t, "sd_admins", c.RBAC.Admins)
+		assert.Equal(t, "a.obs.example.com", c.Static.Origins)
+		assert.Equal(t, "1m", c.Static.CacheTTL)
+		assert.Equal(t, "4096", c.Static.CacheMaxBytes)
 	})
-}
-
-func TestMaskSecret(t *testing.T) {
-	assert.Empty(t, maskSecret(""))
-	assert.Equal(t, "<hidden>", maskSecret("my-secret"))
-	assert.Equal(t, "<hidden>", maskSecret("x"))
 }
 
 func TestSanitizeDBString(t *testing.T) {
@@ -294,7 +418,7 @@ func TestMergeConfigs(t *testing.T) {
 	})
 
 	t.Run("fills empty string fields from env map", func(t *testing.T) {
-		c := &Config{Keycloak: &Keycloak{}}
+		c := &Config{}
 		env := map[string]string{
 			"SD_DB":        "postgresql://localhost/test",
 			"SD_LOG_LEVEL": "info",
@@ -306,7 +430,7 @@ func TestMergeConfigs(t *testing.T) {
 	})
 
 	t.Run("does not overwrite existing values", func(t *testing.T) {
-		c := &Config{DB: "existing", Keycloak: &Keycloak{}}
+		c := &Config{DB: "existing"}
 		env := map[string]string{
 			"SD_DB": "overwritten",
 		}
@@ -316,30 +440,45 @@ func TestMergeConfigs(t *testing.T) {
 	})
 
 	t.Run("merges into embedded struct (RBACConfig)", func(t *testing.T) {
-		c := &Config{Keycloak: &Keycloak{}}
+		c := &Config{}
 		env := map[string]string{
-			"SD_RBAC_GROUPS_ADMINS": "my-admins",
+			"SD_RBAC_ROLES_ADMINS":   "my-admins",
+			"SD_RBAC_ROLES_CREATORS": "my-creators",
 		}
 		err := mergeConfigs(env, c, "SD")
 		require.NoError(t, err)
 		assert.Equal(t, "my-admins", c.RBAC.Admins)
+		assert.Equal(t, "my-creators", c.RBAC.Creators)
 	})
 
-	t.Run("merges into pointer struct (Keycloak)", func(t *testing.T) {
-		kc := &Keycloak{}
-		c := &Config{Keycloak: kc}
+	t.Run("merges into embedded struct (OIDC)", func(t *testing.T) {
+		c := &Config{}
 		env := map[string]string{
-			"SD_KEYCLOAK_URL":   "http://kc.local",
-			"SD_KEYCLOAK_REALM": "test",
+			"SD_OIDC_ISSUER":    "https://zitadel.example.com",
+			"SD_OIDC_CLIENT_ID": "status-dashboard",
 		}
 		err := mergeConfigs(env, c, "SD")
 		require.NoError(t, err)
-		assert.Equal(t, "http://kc.local", c.Keycloak.URL)
-		assert.Equal(t, "test", c.Keycloak.Realm)
+		assert.Equal(t, "https://zitadel.example.com", c.OIDC.Issuer)
+		assert.Equal(t, "status-dashboard", c.OIDC.ClientID)
+	})
+
+	t.Run("merges into embedded struct (Static)", func(t *testing.T) {
+		c := &Config{}
+		env := map[string]string{
+			"SD_STATIC_ORIGINS":         "a.obs.example.com",
+			"SD_STATIC_CACHE_TTL":       "1m",
+			"SD_STATIC_CACHE_MAX_BYTES": "4096",
+		}
+		err := mergeConfigs(env, c, "SD")
+		require.NoError(t, err)
+		assert.Equal(t, "a.obs.example.com", c.Static.Origins)
+		assert.Equal(t, "1m", c.Static.CacheTTL)
+		assert.Equal(t, "4096", c.Static.CacheMaxBytes)
 	})
 
 	t.Run("merges untagged SMTP fields by field name", func(t *testing.T) {
-		c := &Config{Keycloak: &Keycloak{}}
+		c := &Config{}
 		env := map[string]string{
 			"SD_SMTP_HOST":    "smtp.local",
 			"SD_SMTP_USER":    "mailer",
@@ -357,14 +496,13 @@ func TestMergeConfigs(t *testing.T) {
 // name: a tag of "USER" would otherwise inherit the shell's $USER and enable SMTP AUTH
 // against a server that offers none, and "HOSTNAME" would adopt the container's name.
 func TestLoadConf_IgnoresBareEnvNames(t *testing.T) {
+	// The untagged SMTP fields must not fall back to the shell's $USER / $PASSWORD,
+	// which would enable SMTP AUTH against a relay that offers none.
 	t.Setenv("USER", "shell-user")
 	t.Setenv("PASSWORD", "shell-password")
-	t.Setenv("HOSTNAME", "pod-7f9c8d4b6-xk2wl")
-	t.Setenv("PORT", "8080")
-	t.Setenv("DB", "postgresql://wrong/db")
-	t.Setenv("CACHE", "redis://wrong")
-	t.Setenv("SD_SECRET_KEY", "my-secret-key-that-is-32-chars!!")
-	t.Setenv("SD_RBAC_GROUPS_ADMINS", "sd_admins")
+	t.Setenv("SD_OIDC_ISSUER", "https://zitadel.example.com")
+	t.Setenv("SD_OIDC_CLIENT_ID", "status-dashboard")
+	t.Setenv("SD_RBAC_ROLES_ADMINS", "sd_admins")
 	t.Setenv("SD_SMTP_HOST", "127.0.0.1")
 
 	c, err := LoadConf()
@@ -373,26 +511,22 @@ func TestLoadConf_IgnoresBareEnvNames(t *testing.T) {
 	assert.Empty(t, c.SMTP.User)
 	assert.Empty(t, c.SMTP.Password)
 	assert.Equal(t, "127.0.0.1", c.SMTP.Host)
-
-	assert.Equal(t, DefaultHostname, c.Hostname, "must not adopt the container hostname")
-	assert.Equal(t, DefaultPort, c.Port, "must not adopt a platform-injected PORT")
-	assert.Empty(t, c.DB)
-	assert.Empty(t, c.Cache)
 }
 
 func TestLoadConf_PrefixedNamesStillApply(t *testing.T) {
 	t.Setenv("HOSTNAME", "pod-7f9c8d4b6-xk2wl")
-	t.Setenv("SD_HOSTNAME", "https://api.example.com")
 	t.Setenv("SD_PORT", "9000")
 	t.Setenv("SD_DB", "postgresql://localhost/sd")
 	t.Setenv("SD_CACHE", "internal")
-	t.Setenv("SD_SECRET_KEY", "my-secret-key-that-is-32-chars!!")
-	t.Setenv("SD_RBAC_GROUPS_ADMINS", "sd_admins")
+	t.Setenv("SD_OIDC_ISSUER", "https://zitadel.example.com")
+	t.Setenv("SD_OIDC_CLIENT_ID", "status-dashboard")
+	t.Setenv("SD_RBAC_ROLES_ADMINS", "sd_admins")
+	t.Setenv("SD_WEB_URL", "https://web.example.com")
 
 	c, err := LoadConf()
 	require.NoError(t, err)
 
-	assert.Equal(t, "https://api.example.com", c.Hostname)
+	assert.Equal(t, "https://web.example.com", c.WebURL)
 	assert.Equal(t, "9000", c.Port)
 	assert.Equal(t, "postgresql://localhost/sd", c.DB)
 	assert.Equal(t, "internal", c.Cache)
@@ -402,7 +536,7 @@ func baseNotifConfig() Config {
 	return Config{
 		Port:        "8000",
 		MetricsPort: DefaultMetricsPort,
-		SecretKeyV1: "my-secret-key-that-is-32-chars!!", // 32 chars
+		OIDC:        OIDC{Issuer: "https://zitadel.example.com", ClientID: "status-dashboard"},
 		RBAC:        RBACConfig{Admins: "sd_admins"},
 	}
 }
@@ -580,37 +714,63 @@ func TestFillDefaults_Notifications(t *testing.T) {
 }
 
 func TestConfig_Log(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	t.Run("logs the OIDC and RBAC configuration", func(t *testing.T) {
+		logger := zaptest.NewLogger(t)
 
-	t.Run("logs without keycloak", func(t *testing.T) {
 		c := &Config{
-			Hostname:    "localhost",
-			Port:        "8000",
-			WebURL:      "http://localhost:9000",
-			SecretKeyV1: "secret-key-that-is-32-chars-long",
-			DB:          "postgresql://user:pass@localhost:5432/db",
-			LogLevel:    "devel",
-			RBAC:        RBACConfig{Admins: "admins"},
+			Port:     "8000",
+			DB:       "postgresql://localhost:5432/db",
+			LogLevel: "devel",
+			RBAC:     RBACConfig{Admins: "admins"},
+			OIDC: OIDC{
+				Issuer:        "https://zitadel.example.com",
+				ClientID:      "status-dashboard",
+				UsernameClaim: "preferred_username",
+			},
 		}
 		assert.NotPanics(t, func() { c.Log(logger) })
 	})
 
-	t.Run("logs with keycloak", func(t *testing.T) {
+	t.Run("logs every configured role name", func(t *testing.T) {
+		core, logs := observer.New(zap.InfoLevel)
+
 		c := &Config{
-			Hostname:    "localhost",
-			Port:        "8000",
-			WebURL:      "http://localhost:9000",
-			SecretKeyV1: "secret-key-that-is-32-chars-long",
-			DB:          "postgresql://localhost:5432/db",
-			LogLevel:    "devel",
-			RBAC:        RBACConfig{Admins: "admins"},
-			Keycloak: &Keycloak{
-				URL:          "http://kc.local",
-				Realm:        "test",
-				ClientID:     "client",
-				ClientSecret: "secret",
+			Port:     "8000",
+			LogLevel: "devel",
+			RBAC: RBACConfig{
+				Creators:  "sd_creators",
+				Operators: "sd_operators",
+				Admins:    "sd_admins",
+				Reporters: "sd_reporters",
 			},
 		}
-		assert.NotPanics(t, func() { c.Log(logger) })
+		c.Log(zap.New(core))
+
+		entries := logs.FilterMessage("Authentication configuration").All()
+		require.Len(t, entries, 1)
+
+		fields := entries[0].ContextMap()
+		assert.Equal(t, "sd_creators", fields["creators_role"])
+		assert.Equal(t, "sd_operators", fields["operators_role"])
+		assert.Equal(t, "sd_admins", fields["admins_role"])
+		assert.Equal(t, "sd_reporters", fields["reporters_role"])
+	})
+
+	t.Run("logs the static site configuration", func(t *testing.T) {
+		core, logs := observer.New(zap.InfoLevel)
+
+		c := &Config{
+			Port:   "8000",
+			Static: Static{Origins: "bucket.obs.example.com", CacheTTL: "5m", CacheMaxBytes: "67108864"},
+		}
+		c.Log(zap.New(core))
+
+		entries := logs.FilterMessage("Static site configuration").All()
+		require.Len(t, entries, 1)
+
+		fields := entries[0].ContextMap()
+		assert.Equal(t, "bucket.obs.example.com", fields["origins"])
+		assert.Equal(t, "5m", fields["cache_ttl"])
+		assert.Equal(t, "67108864", fields["cache_max_bytes"])
 	})
 }

@@ -32,7 +32,7 @@ func TestChecker_ReviewedToPlanned_EnqueuesStatusChangedToCreator(t *testing.T) 
 
 	// Use a router WITHOUT a publisher so the create + approval produce no outbox rows;
 	// only the checker transition should enqueue.
-	r := initTestsWithHMAC(t)
+	r := initTests(t)
 	resp := createEventOK(t, r, maintenanceData(), creatorTokenA) // -> pending_review
 	eventID := resp.Result[0].IncidentID
 	transitionTo(t, r, eventID, event.MaintenanceReviewed, adminToken) // -> reviewed
@@ -64,7 +64,7 @@ func TestChecker_ReviewedToPlanned_EnqueuesStatusChangedToCreator(t *testing.T) 
 func TestChecker_NoTransition_EnqueuesNothing(t *testing.T) {
 	truncateIncidents(t)
 
-	r := initTestsWithHMAC(t)
+	r := initTests(t)
 	resp := createEventOK(t, r, maintenanceData(), adminToken) // admin -> planned (future start)
 	eventID := resp.Result[0].IncidentID
 

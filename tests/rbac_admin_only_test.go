@@ -10,7 +10,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/stackmon/otc-status-dashboard/internal/api"
-	"github.com/stackmon/otc-status-dashboard/internal/api/auth"
 	apiErrors "github.com/stackmon/otc-status-dashboard/internal/api/errors"
 	"github.com/stackmon/otc-status-dashboard/internal/api/rbac"
 	v2 "github.com/stackmon/otc-status-dashboard/internal/api/v2"
@@ -19,8 +18,8 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/event"
 )
 
-// initTestsAdminOnly sets up a router where only the admin RBAC group is
-// configured. Creator and operator groups are empty strings.
+// initTestsAdminOnly sets up a router where only the admin RBAC role is
+// configured. Creator and operator roles are empty strings.
 func initTestsAdminOnly(t *testing.T) *gin.Engine {
 	t.Helper()
 
@@ -33,25 +32,25 @@ func initTestsAdminOnly(t *testing.T) *gin.Engine {
 	r.Use(api.ErrorHandle())
 
 	logger, _ := zap.NewDevelopment()
-	prov := &auth.Provider{}
-	rbacSvc := rbac.New("", "", adminGroup)
+	authn := testIDP.provider(t, testRBACService().RoleNames()...)
+	rbacSvc := rbac.New(rbac.Config{Admins: adminRole})
 
 	v2Api := r.Group("v2")
 
 	v2Api.GET("events",
-		api.SetJWTClaims(prov, logger, testHMACSecret),
+		api.SetJWTClaims(authn, logger),
 		v2.GetEventsHandler(d, logger, rbacSvc))
 	v2Api.POST("events",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.ValidateComponentsMW(d, logger),
 		v2.PostIncidentHandler(d, logger))
 	v2Api.GET("events/:eventID",
-		api.SetJWTClaims(prov, logger, testHMACSecret),
+		api.SetJWTClaims(authn, logger),
 		api.CheckEventExistenceMW(d, logger),
 		v2.GetIncidentHandler(d, logger, rbacSvc))
 	v2Api.PATCH("events/:eventID",
-		api.AuthenticationMW(prov, logger, testHMACSecret),
+		api.AuthenticationMW(authn, logger),
 		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.CheckEventExistenceMW(d, logger),
 		v2.PatchIncidentHandler(d, logger))

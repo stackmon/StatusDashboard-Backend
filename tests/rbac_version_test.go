@@ -13,7 +13,7 @@ import (
 // TestVersion_NilVersionOnMaintenancePatch verifies that a PATCH on a
 // maintenance event without a version field returns 400.
 func TestVersion_NilVersionOnMaintenancePatch(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 
 	roles := []struct {
 		name  string
@@ -46,7 +46,7 @@ func TestVersion_NilVersionOnMaintenancePatch(t *testing.T) {
 // TestVersion_WrongVersionOnMaintenancePatch verifies that a PATCH on a
 // maintenance event with a stale version returns 409 (version conflict).
 func TestVersion_WrongVersionOnMaintenancePatch(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 
 	t.Run("stale version returns 409", func(t *testing.T) {
 		truncateIncidents(t)
@@ -76,7 +76,7 @@ func TestVersion_WrongVersionOnMaintenancePatch(t *testing.T) {
 // TestVersion_NilVersionOnIncidentPatch verifies that a PATCH on a
 // non-maintenance (incident) event does NOT require a version field.
 func TestVersion_NilVersionOnIncidentPatch(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 
 	t.Run("nil version on incident patch is accepted", func(t *testing.T) {
 		truncateIncidents(t)
@@ -98,7 +98,7 @@ func TestVersion_NilVersionOnIncidentPatch(t *testing.T) {
 // incident-type event with a wrong version still works (version is optional
 // for non-maintenance events).
 func TestVersion_WrongVersionOnIncidentPatch(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 
 	t.Run("explicit version on incident patch is accepted", func(t *testing.T) {
 		truncateIncidents(t)
@@ -118,7 +118,7 @@ func TestVersion_WrongVersionOnIncidentPatch(t *testing.T) {
 // TestVersion_ConcurrentMaintenancePatch simulates two users trying to patch
 // the same maintenance event simultaneously — only the first should succeed.
 func TestVersion_ConcurrentMaintenancePatch(t *testing.T) {
-	r := initTestsWithHMAC(t)
+	r := initRBACTests(t)
 	truncateIncidents(t)
 
 	resp := createEventOK(t, r, maintenanceData(), creatorTokenA)

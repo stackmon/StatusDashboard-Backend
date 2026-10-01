@@ -1,27 +1,31 @@
 package api
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
 	"github.com/stackmon/otc-status-dashboard/internal/api/auth"
-	"github.com/stackmon/otc-status-dashboard/internal/api/errors"
 	"github.com/stackmon/otc-status-dashboard/internal/api/rbac"
 	"github.com/stackmon/otc-status-dashboard/internal/conf"
 	"github.com/stackmon/otc-status-dashboard/internal/db"
 	"github.com/stackmon/otc-status-dashboard/internal/notification"
+	"github.com/stackmon/otc-status-dashboard/internal/static"
 )
 
+// oidcDiscoveryTimeout bounds the provider discovery and JWKS check at startup.
+const oidcDiscoveryTimeout = 15 * time.Second
+
 type API struct {
-	r           *gin.Engine
-	db          *db.DB
-	log         *zap.Logger
-	oa2Prov     *auth.Provider
-	secretKeyV1 string
-	rbac        *rbac.Service
-	notifier    *notification.Publisher
+	r        *gin.Engine
+	db       *db.DB
+	log      *zap.Logger
+	authn    *auth.Provider
+	rbac     *rbac.Service
+	notifier *notification.Publisher
 }
 
 func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
@@ -29,15 +33,16 @@ func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	var oa2Prov *auth.Provider
-	if cfg.Keycloak != nil && cfg.Keycloak.URL != "" {
-		var err error
-		if oa2Prov, err = auth.NewProvider(
-			cfg.Keycloak.URL, cfg.Keycloak.Realm, cfg.Keycloak.ClientID,
-			cfg.Keycloak.ClientSecret, cfg.Hostname, cfg.WebURL,
-		); err != nil {
-			return nil, fmt.Errorf("could not initialise the OAuth provider, err: %w", err)
-		}
+	rbacService := rbac.New(rbac.Config{
+		Creators:  cfg.RBAC.Creators,
+		Operators: cfg.RBAC.Operators,
+		Admins:    cfg.RBAC.Admins,
+		Reporters: cfg.RBAC.Reporters,
+	})
+
+	authn, err := newAuthProvider(cfg, rbacService.RoleNames())
+	if err != nil {
+		return nil, err
 	}
 
 	r := gin.New()
@@ -45,9 +50,13 @@ func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
 	r.Use(ErrorHandle())
 	r.Use(SecurityHeaders())
 	r.Use(CORSMiddleware())
-	r.NoRoute(errors.Return404)
 
-	rbacService := rbac.New(cfg.RBAC.Creators, cfg.RBAC.Operators, cfg.RBAC.Admins)
+	catchAll, err := static.NewHandler(cfg.Static, log)
+	if err != nil {
+		return nil, fmt.Errorf("init static site proxy: %w", err)
+	}
+
+	r.NoRoute(catchAll)
 
 	ncfg, err := notification.ConfigFromConf(cfg)
 	if err != nil {
@@ -55,18 +64,34 @@ func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
 	}
 
 	a := &API{
-		r:           r,
-		db:          database,
-		log:         log,
-		oa2Prov:     oa2Prov,
-		secretKeyV1: cfg.SecretKeyV1,
-		rbac:        rbacService,
-		notifier:    notification.NewPublisher(ncfg, database),
+		r:        r,
+		db:       database,
+		log:      log,
+		authn:    authn,
+		rbac:     rbacService,
+		notifier: notification.NewPublisher(ncfg, database),
 	}
 	if err = a.InitRoutes(cfg.OpenAPISpecPath); err != nil {
 		return nil, fmt.Errorf("init routes: %w", err)
 	}
 	return a, nil
+}
+
+func newAuthProvider(cfg *conf.Config, roleNames []string) (*auth.Provider, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), oidcDiscoveryTimeout)
+	defer cancel()
+
+	provider, err := auth.NewProvider(ctx, auth.ProviderConfig{
+		Issuer:        cfg.OIDC.Issuer,
+		ClientID:      cfg.OIDC.ClientID,
+		RoleNames:     roleNames,
+		UsernameClaim: cfg.OIDC.UsernameClaim,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("could not initialise the OIDC provider: %w", err)
+	}
+
+	return provider, nil
 }
 
 func (a *API) Router() *gin.Engine {
