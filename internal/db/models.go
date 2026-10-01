@@ -176,3 +176,26 @@ func (is *IncidentStatus) BeforeUpdate(_ *gorm.DB) error {
 	is.ModifiedAt = &now
 	return nil
 }
+
+// NotificationOutbox stores one email task per recipient.
+type NotificationOutbox struct {
+	ID            uint           `json:"id" gorm:"primaryKey;autoIncrement:true"`
+	Kind          string         `json:"kind" gorm:"type:varchar(64);not null"`
+	IncidentID    uint           `json:"incident_id" gorm:"not null"`
+	Recipient     string         `json:"recipient" gorm:"type:varchar(255);not null"`
+	Payload       map[string]any `json:"payload" gorm:"type:jsonb;not null;serializer:json"`
+	ChangeID      string         `json:"change_id" gorm:"type:uuid;not null"`
+	DedupKey      string         `json:"dedup_key" gorm:"column:dedup_key;type:varchar(255);not null;uniqueIndex"`
+	Status        string         `json:"status" gorm:"type:varchar(20);not null;default:pending"`
+	Attempts      int            `json:"attempts" gorm:"not null;default:0"`
+	NextAttemptAt *time.Time     `json:"next_attempt_at" gorm:"type:timestamptz"`
+	LockedBy      *string        `json:"locked_by" gorm:"type:varchar(255)"`
+	LockedAt      *time.Time     `json:"locked_at" gorm:"type:timestamptz"`
+	LastError     *string        `json:"last_error" gorm:"type:text"`
+	CreatedAt     time.Time      `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt     time.Time      `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+func (no *NotificationOutbox) TableName() string {
+	return "notification_outbox"
+}

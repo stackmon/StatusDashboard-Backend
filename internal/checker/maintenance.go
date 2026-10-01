@@ -1,14 +1,17 @@
 package checker
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"github.com/stackmon/otc-status-dashboard/internal/db"
 	"github.com/stackmon/otc-status-dashboard/internal/event"
+	"github.com/stackmon/otc-status-dashboard/internal/notification"
 )
 
 type MntStatusHistory struct {
@@ -116,14 +119,39 @@ func (ch *Checker) processMaintenance(mn *db.Incident, activeMaintenances *[]uin
 	actualStatus := ch.evaluateAndFixMntStatus(mn)
 
 	if mn.Status != actualStatus {
+		oldStatus := mn.Status
 		mn.Status = actualStatus
-		if modErr := ch.db.ModifyIncident(mn); modErr != nil {
-			return fmt.Errorf("update maintenance %d: %w", mn.ID, modErr)
+		// The modify + enqueue share one transaction: on a version conflict the
+		// whole thing rolls back and no notification is published.
+		txErr := ch.db.WithTx(context.Background(), func(tx *gorm.DB) error {
+			if modErr := ch.db.ModifyIncidentTx(tx, mn); modErr != nil {
+				return modErr
+			}
+			return ch.notifier.PublishTx(context.Background(), tx, notification.Change{
+				IncidentID:   mn.ID,
+				Title:        strDeref(mn.Text),
+				OldStatus:    oldStatus,
+				NewStatus:    mn.Status,
+				ContactEmail: strDeref(mn.ContactEmail),
+				Actor:        notification.ActorChecker,
+			})
+		})
+		if txErr != nil {
+			return fmt.Errorf("update maintenance %d: %w", mn.ID, txErr)
 		}
+		ch.notifier.Notify() // wake the worker after the commit
 	}
 
 	trackActiveMaintenance(actualStatus, mn.ID, activeMaintenances)
 	return nil
+}
+
+// strDeref returns the pointed-to string, or "" for a nil pointer.
+func strDeref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func (ch *Checker) evaluateAndFixMntStatus(mn *db.Incident) event.Status {

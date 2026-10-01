@@ -476,6 +476,241 @@ func TestMergeConfigs(t *testing.T) {
 		assert.Equal(t, "1m", c.Static.CacheTTL)
 		assert.Equal(t, "4096", c.Static.CacheMaxBytes)
 	})
+
+	t.Run("merges untagged SMTP fields by field name", func(t *testing.T) {
+		c := &Config{}
+		env := map[string]string{
+			"SD_SMTP_HOST":    "smtp.local",
+			"SD_SMTP_USER":    "mailer",
+			"SD_SMTP_TIMEOUT": "15s",
+		}
+		err := mergeConfigs(env, c, "SD")
+		require.NoError(t, err)
+		assert.Equal(t, "smtp.local", c.SMTP.Host)
+		assert.Equal(t, "mailer", c.SMTP.User)
+		assert.Equal(t, "15s", c.SMTP.Timeout)
+	})
+}
+
+// TestLoadConf_IgnoresBareEnvNames guards against envconfig's fallback to the bare tag
+// name: a tag of "USER" would otherwise inherit the shell's $USER and enable SMTP AUTH
+// against a server that offers none, and "HOSTNAME" would adopt the container's name.
+func TestLoadConf_IgnoresBareEnvNames(t *testing.T) {
+	// The untagged SMTP fields must not fall back to the shell's $USER / $PASSWORD,
+	// which would enable SMTP AUTH against a relay that offers none.
+	t.Setenv("USER", "shell-user")
+	t.Setenv("PASSWORD", "shell-password")
+	t.Setenv("SD_OIDC_ISSUER", "https://zitadel.example.com")
+	t.Setenv("SD_OIDC_CLIENT_ID", "status-dashboard")
+	t.Setenv("SD_RBAC_ROLES_ADMINS", "sd_admins")
+	t.Setenv("SD_SMTP_HOST", "127.0.0.1")
+
+	c, err := LoadConf()
+	require.NoError(t, err)
+
+	assert.Empty(t, c.SMTP.User)
+	assert.Empty(t, c.SMTP.Password)
+	assert.Equal(t, "127.0.0.1", c.SMTP.Host)
+}
+
+func TestLoadConf_PrefixedNamesStillApply(t *testing.T) {
+	t.Setenv("HOSTNAME", "pod-7f9c8d4b6-xk2wl")
+	t.Setenv("SD_PORT", "9000")
+	t.Setenv("SD_DB", "postgresql://localhost/sd")
+	t.Setenv("SD_CACHE", "internal")
+	t.Setenv("SD_OIDC_ISSUER", "https://zitadel.example.com")
+	t.Setenv("SD_OIDC_CLIENT_ID", "status-dashboard")
+	t.Setenv("SD_RBAC_ROLES_ADMINS", "sd_admins")
+	t.Setenv("SD_WEB_URL", "https://web.example.com")
+
+	c, err := LoadConf()
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://web.example.com", c.WebURL)
+	assert.Equal(t, "9000", c.Port)
+	assert.Equal(t, "postgresql://localhost/sd", c.DB)
+	assert.Equal(t, "internal", c.Cache)
+}
+
+func baseNotifConfig() Config {
+	return Config{
+		Port:        "8000",
+		MetricsPort: DefaultMetricsPort,
+		OIDC:        OIDC{Issuer: "https://zitadel.example.com", ClientID: "status-dashboard"},
+		RBAC:        RBACConfig{Admins: "sd_admins"},
+	}
+}
+
+func TestValidateNotifications(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(c *Config)
+		expectErr bool
+		errSubstr string
+	}{
+		{
+			name:      "disabled skips all notification checks",
+			mutate:    func(c *Config) { c.Notifications.Enabled = false },
+			expectErr: false,
+		},
+		{
+			name: "enabled with full valid config passes",
+			mutate: func(c *Config) {
+				c.Notifications = NotificationsConfig{
+					Enabled:         true,
+					LeaseTimeout:    "60s",
+					MaxAttempts:     "5",
+					BackoffInterval: "5m",
+					SmodEmail:       "support@com.com",
+				}
+				c.SMTP = SMTPConfig{Host: "smtp.otc", Port: "587", From: "sd@com.com", Timeout: "30s"}
+			},
+			expectErr: false,
+		},
+		{
+			name: "enabled without SMTP host fails",
+			mutate: func(c *Config) {
+				c.Notifications = NotificationsConfig{Enabled: true, SmodEmail: "support@com.com"}
+				c.SMTP = SMTPConfig{Port: "587", From: "sd@com.com", Timeout: "30s"}
+			},
+			expectErr: true,
+			errSubstr: "SD_SMTP_HOST",
+		},
+		{
+			name: "enabled without any review address fails",
+			mutate: func(c *Config) {
+				c.Notifications = NotificationsConfig{Enabled: true, LeaseTimeout: "60s", MaxAttempts: "5", BackoffInterval: "5m"}
+				c.SMTP = SMTPConfig{Host: "smtp.otc", Port: "587", From: "sd@com.com", Timeout: "30s"}
+			},
+			expectErr: true,
+			errSubstr: "at least one review address",
+		},
+		{
+			name: "malformed smtp from fails",
+			mutate: func(c *Config) {
+				c.Notifications = NotificationsConfig{
+					Enabled: true, LeaseTimeout: "60s", MaxAttempts: "5", BackoffInterval: "5m", SmodEmail: "support@com.com",
+				}
+				c.SMTP = SMTPConfig{Host: "smtp.otc", Port: "587", From: "not-an-address", Timeout: "30s"}
+			},
+			expectErr: true,
+			errSubstr: "SD_SMTP_FROM",
+		},
+		{
+			name: "smtp port out of range fails",
+			mutate: func(c *Config) {
+				c.Notifications = NotificationsConfig{
+					Enabled: true, LeaseTimeout: "60s", MaxAttempts: "5", BackoffInterval: "5m", SmodEmail: "support@com.com",
+				}
+				c.SMTP = SMTPConfig{Host: "smtp.otc", Port: "70000", From: "sd@com.com", Timeout: "30s"}
+			},
+			expectErr: true,
+			errSubstr: "SD_SMTP_PORT",
+		},
+		{
+			name: "malformed review address fails",
+			mutate: func(c *Config) {
+				c.Notifications = NotificationsConfig{
+					Enabled: true, LeaseTimeout: "60s", MaxAttempts: "5", BackoffInterval: "5m",
+					EmailsOperators: "ops@com.com, broken at com.com",
+				}
+				c.SMTP = SMTPConfig{Host: "smtp.otc", Port: "587", From: "sd@com.com", Timeout: "30s"}
+			},
+			expectErr: true,
+			errSubstr: "SD_NOTIFICATIONS_EMAILS_OPERATORS",
+		},
+		{
+			name: "multi-address review lists pass",
+			mutate: func(c *Config) {
+				c.Notifications = NotificationsConfig{
+					Enabled: true, LeaseTimeout: "60s", MaxAttempts: "5", BackoffInterval: "5m",
+					SmodEmail:       "support@com.com",
+					EmailsOperators: "ops1@com.com, ops2@com.com",
+					EmailsAdmins:    "admin@com.com",
+				}
+				c.SMTP = SMTPConfig{Host: "smtp.otc", Port: "587", From: "sd@com.com", Timeout: "30s"}
+			},
+			expectErr: false,
+		},
+		{
+			name: "lease timeout not greater than smtp timeout fails",
+			mutate: func(c *Config) {
+				c.Notifications = NotificationsConfig{
+					Enabled: true, LeaseTimeout: "30s", MaxAttempts: "5", BackoffInterval: "5m", SmodEmail: "support@com.com",
+				}
+				c.SMTP = SMTPConfig{Host: "smtp.otc", Port: "587", From: "sd@com.com", Timeout: "30s"}
+			},
+			expectErr: true,
+			errSubstr: "must be greater than",
+		},
+		{
+			name: "invalid smtp timeout fails",
+			mutate: func(c *Config) {
+				c.Notifications = NotificationsConfig{
+					Enabled: true, LeaseTimeout: "60s", MaxAttempts: "5", BackoffInterval: "5m", SmodEmail: "support@com.com",
+				}
+				c.SMTP = SMTPConfig{Host: "smtp.otc", Port: "587", From: "sd@com.com", Timeout: "notaduration"}
+			},
+			expectErr: true,
+			errSubstr: "SD_SMTP_TIMEOUT",
+		},
+		{
+			name: "non-positive max attempts fails",
+			mutate: func(c *Config) {
+				c.Notifications = NotificationsConfig{
+					Enabled: true, LeaseTimeout: "60s", MaxAttempts: "0", BackoffInterval: "5m", SmodEmail: "support@com.com",
+				}
+				c.SMTP = SMTPConfig{Host: "smtp.otc", Port: "587", From: "sd@com.com", Timeout: "30s"}
+			},
+			expectErr: true,
+			errSubstr: "SD_NOTIFICATIONS_MAX_ATTEMPTS",
+		},
+		{
+			name: "invalid backoff interval fails",
+			mutate: func(c *Config) {
+				c.Notifications = NotificationsConfig{
+					Enabled: true, LeaseTimeout: "60s", MaxAttempts: "5", BackoffInterval: "bad", SmodEmail: "support@com.com",
+				}
+				c.SMTP = SMTPConfig{Host: "smtp.otc", Port: "587", From: "sd@com.com", Timeout: "30s"}
+			},
+			expectErr: true,
+			errSubstr: "SD_NOTIFICATIONS_BACKOFF_INTERVAL",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := baseNotifConfig()
+			tc.mutate(&cfg)
+			err := cfg.Validate()
+			if tc.expectErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.errSubstr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestFillDefaults_Notifications(t *testing.T) {
+	t.Run("fills notification timing defaults when enabled", func(t *testing.T) {
+		c := &Config{Notifications: NotificationsConfig{Enabled: true}}
+		c.FillDefaults()
+
+		assert.Equal(t, DefaultSMTPTimeout, c.SMTP.Timeout)
+		assert.Equal(t, DefaultLeaseTimeout, c.Notifications.LeaseTimeout)
+		assert.Equal(t, DefaultMaxAttempts, c.Notifications.MaxAttempts)
+		assert.Equal(t, DefaultBackoffInterval, c.Notifications.BackoffInterval)
+	})
+
+	t.Run("leaves notification timing empty when disabled", func(t *testing.T) {
+		c := &Config{Notifications: NotificationsConfig{Enabled: false}}
+		c.FillDefaults()
+
+		assert.Empty(t, c.SMTP.Timeout)
+		assert.Empty(t, c.Notifications.LeaseTimeout)
+	})
 }
 
 func TestConfig_Log(t *testing.T) {

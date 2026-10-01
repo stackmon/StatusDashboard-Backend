@@ -41,8 +41,23 @@ is missing or invalid.
 | `SD_STATIC_ORIGINS` | – | OBS website endpoints serving the static site, primary first, host only |
 | `SD_STATIC_CACHE_TTL` | `5m` | lifetime of a cached response that carries no `Cache-Control` |
 | `SD_STATIC_CACHE_MAX_BYTES` | `67108864` | byte budget of the whole response cache |
+| `SD_NOTIFICATIONS_ENABLED` | `false` | master switch for maintenance email notifications |
+| `SD_SMTP_HOST` / `SD_SMTP_PORT` / `SD_SMTP_FROM` | – | **required** when notifications are enabled |
+| `SD_SMTP_USER` / `SD_SMTP_PASSWORD` / `SD_SMTP_TLS` | – | optional SMTP AUTH and TLS settings |
+| `SD_SMTP_TIMEOUT` | `30s` | SMTP connect/send timeout (Go duration) |
+| `SD_NOTIFICATIONS_LEASE_TIMEOUT` | `60s` | must exceed `SD_SMTP_TIMEOUT` |
+| `SD_NOTIFICATIONS_MAX_ATTEMPTS` | `5` | retry limit before a row is marked failed |
+| `SD_NOTIFICATIONS_BACKOFF_INTERVAL` | `5m` | base delay for exponential retry backoff |
+| `SD_NOTIFICATIONS_SMOD_EMAIL` | – | SMOD review recipient |
+| `SD_NOTIFICATIONS_EMAILS_OPERATORS` | – | comma-separated operator review recipients |
+| `SD_NOTIFICATIONS_EMAILS_ADMINS` | – | comma-separated admin review recipients |
+| `SD_NOTIFICATIONS_ALLOWED_DOMAINS` | – | domain allow-list for `contact_email`; empty accepts all |
+| `SD_NOTIFICATIONS_EXCLUDED_EMAILS` | – | addresses that never receive notifications |
+| `SD_WEB_URL` | – | web origin for maintenance deep links in emails |
+| `SD_METRICS_PORT` | `9090` | dedicated `/metrics` port (only started when notifications are enabled) |
 
 Each `SD_RBAC_ROLES_*` variable accepts a comma-separated list of names. See [docs/auth.md](docs/auth.md).
+Maintenance email notifications are documented in [docs/notifications.md](docs/notifications.md).
 
 ## API
 
@@ -54,6 +69,7 @@ Each `SD_RBAC_ROLES_*` variable accepts a comma-separated list of names. See [do
 | `/v2/incidents` | deprecated alias of `/v2/events` |
 | `/v2/components` | list, create, read |
 | `/v2/availability` | monthly availability per component |
+| `/v2/notifications` | admin-only queue stats, failed rows and re-drive (see [docs/notifications.md](docs/notifications.md)) |
 | `/rss/` | RSS feed for the frontend |
 
 Business rules the specification cannot express — validation, status lifecycles, automatic
@@ -100,6 +116,7 @@ Layout: `cmd/` entry point, `internal/api` HTTP layer (middleware, routes, `v2`,
 | --- | --- |
 | [docs/events.md](docs/events.md) | event types, creation rules, status lifecycles, availability, RSS |
 | [docs/auth.md](docs/auth.md) | OIDC authentication, RBAC roles, permissions, field visibility |
+| [docs/notifications.md](docs/notifications.md) | maintenance email notifications: outbox, recipients, config, ops |
 | [docs/testing.md](docs/testing.md) | unit and integration suites, how to run them |
 | [docs/diagrams/](docs/diagrams) | decision graph for system incident creation |
 | [openapi.yaml](openapi.yaml) | HTTP contract and schemas |

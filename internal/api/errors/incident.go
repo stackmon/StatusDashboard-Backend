@@ -1,6 +1,10 @@
 package errors
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
 
 var ErrIncidentDSNotExist = errors.New("event does not exist")
 var ErrIncidentEndDateShouldBeEmpty = errors.New("event end_date should be empty")
@@ -48,6 +52,28 @@ var ErrMaintenanceContactEmailRequired = errors.New("contact_email is required f
 var ErrMaintenanceContactEmailInvalid = errors.New("contact_email has invalid format")
 var ErrMaintenanceEndDateBeforeStart = errors.New("end_date must be after start_date")
 var ErrMaintenanceDescriptionRequired = errors.New("description is required for maintenance")
+
+// NewErrMaintenanceContactEmailDomain names the permitted domains so the caller can
+// fix the request without reading the deployment configuration.
+func NewErrMaintenanceContactEmailDomain(allowed []string) error {
+	return fmt.Errorf("contact_email domain is not allowed, permitted domains: %s", strings.Join(allowed, ", "))
+}
+
+// NewErrNotificationStatusInvalid names the statuses accepted by ?status=.
+func NewErrNotificationStatusInvalid(allowed []string) error {
+	return fmt.Errorf("invalid status, expected one of: %s", strings.Join(allowed, ", "))
+}
+
+// NewErrNotificationLimitInvalid states the accepted range for ?limit=.
+func NewErrNotificationLimitInvalid(maxLimit int) error {
+	return fmt.Errorf("invalid limit, expected a number in range 1:%d", maxLimit)
+}
+
+// NewErrNotificationRedriveLimitInvalid states the accepted maximum size for the
+// re-drive id list.
+func NewErrNotificationRedriveLimitInvalid(maxIDs int) error {
+	return fmt.Errorf("too many ids, expected at most %d", maxIDs)
+}
 
 // Errors for extract restrictions
 

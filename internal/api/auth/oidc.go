@@ -96,6 +96,7 @@ func (p *Provider) Verify(ctx context.Context, rawToken string) (*Claims, error)
 	return &Claims{
 		Subject:  token.Subject,
 		Username: stringClaim(payload, p.usernameClaim),
+		Email:    stringClaim(payload, "email"),
 		Roles:    extractRolesFromClaims(payload, p.roleNames),
 		Provider: ProviderZitadel,
 	}, nil

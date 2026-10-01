@@ -230,7 +230,7 @@ func truncateIncidents(t *testing.T) {
 	gormDB, err := gorm.Open(gormpostgres.Open(databaseURL), &gorm.Config{})
 	require.NoError(t, err, "failed to open gorm connection for truncation")
 
-	result := gormDB.Exec("TRUNCATE TABLE incident, incident_status, incident_component_relation RESTART IDENTITY")
+	result := gormDB.Exec("TRUNCATE TABLE incident, incident_status, incident_component_relation, notification_outbox RESTART IDENTITY")
 	require.NoError(t, result.Error, "failed to truncate incident tables")
 
 	sqlDB, err := gormDB.DB()

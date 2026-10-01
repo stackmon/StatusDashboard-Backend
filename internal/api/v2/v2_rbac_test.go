@@ -561,7 +561,7 @@ func TestPrepareIncidentCreateNonMaintenance(t *testing.T) {
 		Type:        event.TypeIncident,
 	}
 
-	result := prepareIncidentCreate(c, logger, incData)
+	result := prepareIncidentCreate(c, logger, incData, nil)
 
 	assert.True(t, result, "non-maintenance should pass without status resolution")
 	assert.Empty(t, incData.Status, "status should not be set for non-maintenance")
@@ -631,7 +631,7 @@ func TestPrepareIncidentCreateReporterScope(t *testing.T) {
 				System:     tc.system,
 			}
 
-			result := prepareIncidentCreate(c, logger, incData)
+			result := prepareIncidentCreate(c, logger, incData, nil)
 
 			assert.Equal(t, tc.expectAllow, result)
 			assert.Equal(t, tc.expectStatus, w.Code)
@@ -652,7 +652,7 @@ func TestPrepareIncidentCreateReporterScope(t *testing.T) {
 			System:     boolPtr(false),
 		}
 
-		assert.True(t, prepareIncidentCreate(c, logger, incData))
+		assert.True(t, prepareIncidentCreate(c, logger, incData, nil))
 		assert.Equal(t, 200, w.Code)
 	})
 
@@ -669,7 +669,7 @@ func TestPrepareIncidentCreateReporterScope(t *testing.T) {
 			System:     boolPtr(true),
 		}
 
-		assert.False(t, prepareIncidentCreate(c, logger, incData))
+		assert.False(t, prepareIncidentCreate(c, logger, incData, nil))
 		assert.Equal(t, http.StatusForbidden, w.Code)
 	})
 }

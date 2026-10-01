@@ -65,12 +65,12 @@ func TestCreation_IncidentByRoles(t *testing.T) {
 func TestCreation_MaintenanceValidation(t *testing.T) {
 	r := initRBACTests(t)
 
-	t.Run("missing contact_email rejected", func(t *testing.T) {
+	t.Run("missing contact_email accepted, HMAC token carries no email claim", func(t *testing.T) {
 		truncateIncidents(t)
 		data := maintenanceData()
 		data.ContactEmail = ""
 		w, _ := createEvent(t, r, data, creatorTokenA)
-		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Equal(t, http.StatusOK, w.Code)
 	})
 
 	t.Run("invalid contact_email rejected", func(t *testing.T) {

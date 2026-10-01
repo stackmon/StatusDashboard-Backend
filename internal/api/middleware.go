@@ -94,6 +94,9 @@ func authenticate(authn *auth.Provider, rawToken string, c *gin.Context, logger 
 
 	c.Set(v2.UserIDContextKey, claims.Subject)
 	c.Set(v2.UserIDRolesContextKey, roles)
+	if claims.Email != "" {
+		c.Set(v2.UserEmailContextKey, claims.Email)
+	}
 
 	logger.Debug("authenticated request",
 		zap.String("provider", claims.Provider),
@@ -298,6 +301,14 @@ func Logger(log *zap.Logger) gin.HandlerFunc {
 		default:
 			log.Info(path, fields...)
 		}
+	}
+}
+
+func SecurityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("X-Frame-Options", "DENY")
+		c.Writer.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+		c.Next()
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/api/rbac"
 	"github.com/stackmon/otc-status-dashboard/internal/conf"
 	"github.com/stackmon/otc-status-dashboard/internal/db"
+	"github.com/stackmon/otc-status-dashboard/internal/notification"
 	"github.com/stackmon/otc-status-dashboard/internal/static"
 )
 
@@ -19,11 +20,12 @@ import (
 const oidcDiscoveryTimeout = 15 * time.Second
 
 type API struct {
-	r     *gin.Engine
-	db    *db.DB
-	log   *zap.Logger
-	authn *auth.Provider
-	rbac  *rbac.Service
+	r        *gin.Engine
+	db       *db.DB
+	log      *zap.Logger
+	authn    *auth.Provider
+	rbac     *rbac.Service
+	notifier *notification.Publisher
 }
 
 func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
@@ -46,6 +48,7 @@ func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
 	r := gin.New()
 	r.Use(Logger(log), gin.Recovery())
 	r.Use(ErrorHandle())
+	r.Use(SecurityHeaders())
 	r.Use(CORSMiddleware())
 
 	catchAll, err := static.NewHandler(cfg.Static, log)
@@ -55,12 +58,18 @@ func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
 
 	r.NoRoute(catchAll)
 
+	ncfg, err := notification.ConfigFromConf(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse notification config: %w", err)
+	}
+
 	a := &API{
-		r:     r,
-		db:    database,
-		log:   log,
-		authn: authn,
-		rbac:  rbacService,
+		r:        r,
+		db:       database,
+		log:      log,
+		authn:    authn,
+		rbac:     rbacService,
+		notifier: notification.NewPublisher(ncfg, database),
 	}
 	if err = a.InitRoutes(cfg.OpenAPISpecPath); err != nil {
 		return nil, fmt.Errorf("init routes: %w", err)
@@ -87,4 +96,10 @@ func newAuthProvider(cfg *conf.Config, roleNames []string) (*auth.Provider, erro
 
 func (a *API) Router() *gin.Engine {
 	return a.r
+}
+
+// Publisher returns the notification publisher so the delivery worker's Notify can
+// be wired in during app startup.
+func (a *API) Publisher() *notification.Publisher {
+	return a.notifier
 }

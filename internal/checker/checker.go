@@ -8,13 +8,15 @@ import (
 
 	"github.com/stackmon/otc-status-dashboard/internal/conf"
 	"github.com/stackmon/otc-status-dashboard/internal/db"
+	"github.com/stackmon/otc-status-dashboard/internal/notification"
 )
 
 const defaultPeriod = time.Minute * 2
 
 type Checker struct {
-	db  *db.DB
-	log *zap.Logger
+	db       *db.DB
+	log      *zap.Logger
+	notifier *notification.Publisher
 	// lastIDs are the earliest planned or in_progress maintenance/info events ID.
 	lastMntID  uint
 	lastInfoID uint
@@ -25,7 +27,11 @@ func New(c *conf.Config, log *zap.Logger) (*Checker, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Checker{db: dbNew, log: log}, nil
+	ncfg, err := notification.ConfigFromConf(c)
+	if err != nil {
+		return nil, err
+	}
+	return &Checker{db: dbNew, log: log, notifier: notification.NewPublisher(ncfg, dbNew)}, nil
 }
 
 func (ch *Checker) Check() {
@@ -72,4 +78,15 @@ func (ch *Checker) Shutdown(done chan struct{}) error {
 	done <- struct{}{}
 	close(done)
 	return ch.db.Close()
+}
+
+// Close releases the checker's database pool without going through the Run loop.
+func (ch *Checker) Close() error {
+	return ch.db.Close()
+}
+
+// Publisher returns the checker's notification publisher so the delivery worker's
+// Notify can be wired in during app startup.
+func (ch *Checker) Publisher() *notification.Publisher {
+	return ch.notifier
 }

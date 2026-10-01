@@ -1,0 +1,7 @@
+Maintenance "{{.Title}}" (event #{{.IncidentID}}) {{.Headline}}.
+
+{{if .OldStatus}}Status: {{.OldStatus}} -> {{.NewStatus}}{{else}}Status: {{.NewStatus}}{{end}}
+{{if .OldStatus}}Changed by{{else}}Created by{{end}}: {{.Actor}}
+Time (UTC): {{.ChangedAt}}
+
+Details: {{.Link}}

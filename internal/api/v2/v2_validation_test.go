@@ -34,15 +34,14 @@ func TestValidateMaintenanceCreation(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "Missing contact_email",
+			name: "Missing contact_email is allowed, resolved from the token later",
 			incData: IncidentData{
 				ContactEmail: "",
 				StartDate:    futureTime,
 				EndDate:      &laterTime,
 				Description:  "Scheduled maintenance",
 			},
-			expectError: true,
-			errorMsg:    "contact_email is required",
+			expectError: false,
 		},
 		{
 			name: "Invalid contact_email format",

@@ -108,11 +108,11 @@ func parseAndSetTypes(queryTypes *string, params *db.IncidentsParams) error {
 // validateMaintenanceCreation validates maintenance-specific fields at creation time.
 // Note: EndDate nil check is handled by validateEventCreation before this function is called.
 func validateMaintenanceCreation(incData IncidentData) error {
-	if incData.ContactEmail == "" {
-		return apiErrors.ErrMaintenanceContactEmailRequired
-	}
-	if _, err := mail.ParseAddress(incData.ContactEmail); err != nil {
-		return apiErrors.ErrMaintenanceContactEmailInvalid
+	// Optional: prepareIncidentCreate falls back to the address from the token.
+	if incData.ContactEmail != "" {
+		if _, err := mail.ParseAddress(incData.ContactEmail); err != nil {
+			return apiErrors.ErrMaintenanceContactEmailInvalid
+		}
 	}
 
 	if incData.EndDate != nil && !incData.EndDate.After(incData.StartDate) {
