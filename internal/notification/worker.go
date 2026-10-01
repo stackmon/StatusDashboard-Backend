@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -83,33 +82,23 @@ func (w *Worker) Notify() {
 }
 
 // Run processes due rows on every signal and on a periodic safety sweep until the
-// context is cancelled. In-flight sends finish before Run returns.
+// context is cancelled. In-flight sends finish before Run returns: the drain runs
+// synchronously, so ctx.Done() is only observed once the current drain has completed.
 func (w *Worker) Run(ctx context.Context) {
 	w.log.Info("notification worker started", zap.String("lease_owner", w.leaseOwner))
 	ticker := time.NewTicker(w.sweepEvery)
 	defer ticker.Stop()
 
-	var inFlight sync.WaitGroup
-
 	for {
 		select {
 		case <-ctx.Done():
-			inFlight.Wait()
 			w.log.Info("notification worker stopped")
 			return
 		case <-w.signal:
-			inFlight.Add(1)
-			go func() {
-				defer inFlight.Done()
-				w.drainQuietly(ctx)
-			}()
+			w.drainQuietly(ctx)
 		case <-ticker.C:
-			inFlight.Add(1)
-			go func() {
-				defer inFlight.Done()
-				w.drainQuietly(ctx)
-				w.runRetention(ctx)
-			}()
+			w.drainQuietly(ctx)
+			w.runRetention(ctx)
 		}
 	}
 }
