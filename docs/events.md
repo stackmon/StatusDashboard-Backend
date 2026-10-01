@@ -146,6 +146,8 @@ see [auth.md](auth.md).
   `pending_review` or `cancelled`.
 * `version` is mandatory, enables optimistic locking and is incremented by every successful write
   (a stale `version` yields `409`).
+* A real status transition (create, patch, or checker advance) enqueues a maintenance email
+  notification when the feature is enabled — see [notifications.md](notifications.md).
 
 ### Info
 
