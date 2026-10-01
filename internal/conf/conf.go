@@ -320,7 +320,6 @@ func validateEmailList(envName, raw string) error {
 	return nil
 }
 
-
 func (r *RBACConfig) Validate() error {
 	if r.Admins == "" {
 		return fmt.Errorf("SD_RBAC_ROLES_ADMINS is required")
