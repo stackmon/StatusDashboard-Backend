@@ -1062,14 +1062,19 @@ func strDeref(s *string) string {
 
 // persistIncidentPatch writes the modification and its notification in one
 // transaction, mapping failures to HTTP responses. It returns false when the
-// caller should stop (an error response was already written).
+// caller should stop (an error response was already written). A notification is
+// only enqueued on a real status transition, so no-op patches do not re-notify.
 func persistIncidentPatch(
 	c *gin.Context, dbInst *db.DB, logger *zap.Logger, publisher *notification.Publisher,
 	storedIncident *db.Incident, oldStatus event.Status, userID *string,
 ) bool {
+	statusChanged := storedIncident.Status != oldStatus
 	err := dbInst.WithTx(c.Request.Context(), func(tx *gorm.DB) error {
 		if e := dbInst.ModifyIncidentTx(tx, storedIncident); e != nil {
 			return e
+		}
+		if !statusChanged {
+			return nil
 		}
 		return publishMaintenanceChange(c.Request.Context(), tx, publisher, storedIncident, oldStatus, userID)
 	})
@@ -1086,7 +1091,7 @@ func persistIncidentPatch(
 		return false
 	}
 
-	if storedIncident.Type == event.TypeMaintenance {
+	if statusChanged && storedIncident.Type == event.TypeMaintenance {
 		publisher.Notify() // wake the worker after the commit
 	}
 	return true

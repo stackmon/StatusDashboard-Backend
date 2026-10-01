@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -88,16 +89,27 @@ func (w *Worker) Run(ctx context.Context) {
 	ticker := time.NewTicker(w.sweepEvery)
 	defer ticker.Stop()
 
+	var inFlight sync.WaitGroup
+
 	for {
 		select {
 		case <-ctx.Done():
+			inFlight.Wait()
 			w.log.Info("notification worker stopped")
 			return
 		case <-w.signal:
-			w.drainQuietly(ctx)
+			inFlight.Add(1)
+			go func() {
+				defer inFlight.Done()
+				w.drainQuietly(ctx)
+			}()
 		case <-ticker.C:
-			w.drainQuietly(ctx)
-			w.runRetention(ctx)
+			inFlight.Add(1)
+			go func() {
+				defer inFlight.Done()
+				w.drainQuietly(ctx)
+				w.runRetention(ctx)
+			}()
 		}
 	}
 }
@@ -166,29 +178,44 @@ func (w *Worker) deliver(ctx context.Context, row db.NotificationOutbox) {
 			zap.Bool("permanent", errors.Is(err, ErrPermanentDelivery)),
 			zap.Error(err))
 		w.metrics.recordFailed(row.Kind)
-		w.markFailure(ctx, row.ID, err)
+		w.markFailure(row.ID, err)
 		return
 	}
 
 	w.metrics.recordSent(row.Kind)
-	if err = w.db.MarkSent(ctx, nil, row.ID); err != nil {
+	updateCtx, cancel := w.updateCtx()
+	defer cancel()
+	if err = w.db.MarkSent(updateCtx, nil, row.ID); err != nil {
 		w.log.Error("mark sent", zap.Uint("outbox_id", row.ID), zap.Error(err))
 	}
 }
 
 // markFailure records the outcome, skipping the retry schedule for rejections that
 // every further attempt would reproduce.
-func (w *Worker) markFailure(ctx context.Context, id uint, sendErr error) {
+func (w *Worker) markFailure(id uint, sendErr error) {
+	updateCtx, cancel := w.updateCtx()
+	defer cancel()
 	var err error
 	if errors.Is(sendErr, ErrPermanentDelivery) {
-		err = w.db.MarkFailedTerminal(ctx, nil, id, sendErr.Error())
+		err = w.db.MarkFailedTerminal(updateCtx, nil, id, sendErr.Error())
 	} else {
-		err = w.db.MarkFailed(ctx, nil, id, sendErr.Error(), w.maxAttempts, w.backoff)
+		err = w.db.MarkFailed(updateCtx, nil, id, sendErr.Error(), w.maxAttempts, w.backoff)
 	}
 	if err != nil {
 		w.log.Error("mark failed", zap.Uint("outbox_id", id), zap.Error(err))
 	}
 }
+
+// updateCtx returns a short-lived context independent of the worker's ctx so the
+// outbox status write still completes during shutdown; otherwise a cancelled send
+// would also cancel the write, leaving the row "processing" and risking a duplicate
+// send on the next lease sweep. The caller must call the returned cancel.
+func (w *Worker) updateCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), updateTimeout)
+}
+
+// updateTimeout bounds the outbox status write so a slow DB cannot stall shutdown.
+const updateTimeout = 5 * time.Second
 
 // sendGuarded renders and sends one row inside a recover() guard and an SMTP timeout.
 func (w *Worker) sendGuarded(ctx context.Context, row db.NotificationOutbox) (err error) {

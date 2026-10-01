@@ -1,6 +1,8 @@
 package v2
 
 import (
+	"errors"
+	"io"
 	"net/http"
 	"slices"
 	"strconv"
@@ -130,8 +132,13 @@ func RedriveNotificationsHandler(dbInst *db.DB, logger *zap.Logger, pub ...*noti
 		}
 
 		var body RedriveNotificationsData
-		// A missing/empty body is valid: re-drive everything.
-		_ = c.ShouldBindBodyWithJSON(&body)
+		// io.EOF means an empty body (valid: re-drive all); any other parse error is
+		// a client error and must not be treated as "re-drive everything".
+		if err := c.ShouldBindBodyWithJSON(&body); err != nil && !errors.Is(err, io.EOF) {
+			logger.Warn("re-drive failed: invalid request body", zap.Error(err))
+			apiErrors.RaiseBadRequestErr(c, err)
+			return
+		}
 
 		count, err := dbInst.RedriveFailed(c.Request.Context(), body.IDs...)
 		if err != nil {
