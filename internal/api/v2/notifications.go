@@ -27,6 +27,9 @@ const defaultFailedListLimit = 100
 // maxFailedListLimit caps ?limit= so one request cannot dump the whole outbox.
 const maxFailedListLimit = 1000
 
+// maxRedriveIDs caps the ?ids= list so one request cannot build an unbounded IN clause.
+const maxRedriveIDs = 1000
+
 // requireAdmin ensures the caller resolved to the Admin role. It writes the error
 // response and returns false when not.
 func requireAdmin(c *gin.Context, logger *zap.Logger) bool {
@@ -137,6 +140,11 @@ func RedriveNotificationsHandler(dbInst *db.DB, logger *zap.Logger, pub ...*noti
 		if err := c.ShouldBindBodyWithJSON(&body); err != nil && !errors.Is(err, io.EOF) {
 			logger.Warn("re-drive failed: invalid request body", zap.Error(err))
 			apiErrors.RaiseBadRequestErr(c, err)
+			return
+		}
+		if len(body.IDs) > maxRedriveIDs {
+			logger.Warn("re-drive failed: too many ids", zap.Int("count", len(body.IDs)))
+			apiErrors.RaiseBadRequestErr(c, apiErrors.NewErrNotificationRedriveLimitInvalid(maxRedriveIDs))
 			return
 		}
 

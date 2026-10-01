@@ -69,6 +69,12 @@ func NewErrNotificationLimitInvalid(maxLimit int) error {
 	return fmt.Errorf("invalid limit, expected a number in range 1:%d", maxLimit)
 }
 
+// NewErrNotificationRedriveLimitInvalid states the accepted maximum size for the
+// re-drive id list.
+func NewErrNotificationRedriveLimitInvalid(maxIDs int) error {
+	return fmt.Errorf("too many ids, expected at most %d", maxIDs)
+}
+
 // Errors for extract restrictions
 
 var ErrExtractForbiddenRole = errors.New("extract is only available for operators and admins")

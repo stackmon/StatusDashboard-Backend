@@ -2,8 +2,7 @@ package notification
 
 import (
 	"context"
-	"slices"
-	"strings"
+	"errors"
 
 	"gorm.io/gorm"
 
@@ -37,17 +36,11 @@ func NewPublisher(cfg Config, database *db.DB) *Publisher {
 // It permits everything when the feature is off or no allow-list is configured, so
 // existing installations keep working unchanged.
 func (p *Publisher) AllowsDomain(email string) bool {
-	if p == nil || !p.enabled || len(p.allowedDomains) == 0 {
+	if p == nil || !p.enabled {
 		return true
 	}
 
-	at := strings.LastIndex(email, "@")
-	if at < 0 {
-		return false
-	}
-	domain := normalizeEmail(email[at+1:])
-
-	return slices.Contains(p.allowedDomains, domain)
+	return allowedDomain(p.allowedDomains, email)
 }
 
 // AllowedDomains lists the configured domains, for error messages.
@@ -90,7 +83,9 @@ func (p *Publisher) PublishTx(ctx context.Context, tx *gorm.DB, ch Change) error
 	}
 	rows := p.resolver.BuildRows(ch)
 	for i := range rows {
-		if err := p.db.Enqueue(ctx, tx, rows[i]); err != nil {
+		// A duplicate means this transition was already notified; skip it rather than
+		// failing the business transaction that carries the change.
+		if err := p.db.Enqueue(ctx, tx, rows[i]); err != nil && !errors.Is(err, db.ErrNotificationDuplicate) {
 			return err
 		}
 	}

@@ -333,3 +333,26 @@ func TestAPI_RedriveNotifications_MalformedBodyRejected(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Equal(t, db.NotificationStatusFailed, fetchByDedup(t, g, dedup).Status, "no redrive on malformed body")
 }
+
+func TestAPI_RedriveNotifications_TooManyIDsRejected(t *testing.T) {
+	truncateIncidents(t)
+	r, d, g := initNotifOpsRouter(t)
+	incID := seedIncident(t, d)
+	dedup := enqueueWithState(t, d, g, incID, "f@com.com",
+		map[string]any{"status": db.NotificationStatusFailed, "attempts": 5, "last_error": "x"})
+
+	ids := make([]uint, 1001)
+	for i := range ids {
+		ids[i] = uint(i + 1)
+	}
+	payload, err := json.Marshal(map[string]any{"ids": ids})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/v2/notifications/redrive", bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, db.NotificationStatusFailed, fetchByDedup(t, g, dedup).Status, "no redrive when the id list is too large")
+}

@@ -196,7 +196,8 @@ func (db *DB) RecoverStaleProcessing(
 	return rows, db.execWithTx(ctx, tx, func(gtx *gorm.DB) error {
 		cutoff := time.Now().UTC().Add(-leaseTimeout)
 		now := time.Now().UTC()
-		if err := gtx.Where("status = ?", NotificationStatusProcessing).
+		if err := gtx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+			Where("status = ?", NotificationStatusProcessing).
 			Where("locked_at < ?", cutoff).
 			Find(&rows).Error; err != nil {
 			return err
@@ -212,12 +213,15 @@ func (db *DB) RecoverStaleProcessing(
 			rows[i].LockedBy = nil
 			rows[i].LockedAt = nil
 
-			if err := gtx.Model(&rows[i]).Updates(map[string]any{
-				"status":          rows[i].Status,
-				"next_attempt_at": rows[i].NextAttemptAt,
-				"locked_by":       rows[i].LockedBy,
-				"locked_at":       rows[i].LockedAt,
-			}).Error; err != nil {
+			if err := gtx.Model(&rows[i]).
+				Where("status = ?", NotificationStatusProcessing).
+				Where("locked_at < ?", cutoff).
+				Updates(map[string]any{
+					"status":          rows[i].Status,
+					"next_attempt_at": rows[i].NextAttemptAt,
+					"locked_by":       rows[i].LockedBy,
+					"locked_at":       rows[i].LockedAt,
+				}).Error; err != nil {
 				return err
 			}
 		}

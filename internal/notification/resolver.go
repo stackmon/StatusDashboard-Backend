@@ -32,6 +32,7 @@ type Resolver struct {
 	operators []string
 	admins    []string
 	excluded  map[string]struct{}
+	allowed   []string
 	baseURL   string
 }
 
@@ -47,6 +48,7 @@ func NewResolver(cfg Config) *Resolver {
 		operators: cfg.ReviewOperators,
 		admins:    cfg.ReviewAdmins,
 		excluded:  excluded,
+		allowed:   cfg.AllowedDomains,
 		baseURL:   cfg.BaseURL,
 	}
 }
@@ -84,7 +86,11 @@ func (r *Resolver) Recipients(status event.Status, contactEmail string) []string
 			add(e)
 		}
 	}
-	add(contactEmail)
+	// The allow-list constrains only the user-supplied creator address; the review
+	// audience comes from configuration and is always eligible.
+	if allowedDomain(r.allowed, contactEmail) {
+		add(contactEmail)
+	}
 
 	return ordered
 }
@@ -113,16 +119,19 @@ func (r *Resolver) BuildRows(ch Change) []db.NotificationOutbox {
 			Recipient:  rcpt,
 			Payload:    payload,
 			ChangeID:   changeID,
-			DedupKey:   DedupKey(changeID, kind, rcpt),
+			DedupKey:   DedupKey(ch.IncidentID, kind, ch.OldStatus, ch.NewStatus, rcpt),
 			Status:     db.NotificationStatusPending,
 		})
 	}
 	return rows
 }
 
-// DedupKey builds the unique key change_id : kind : recipient (architecture §4).
-func DedupKey(changeID, kind, recipient string) string {
-	return fmt.Sprintf("%s:%s:%s", changeID, kind, recipient)
+// DedupKey identifies one notification for a committed maintenance transition. It is
+// derived from the business identity rather than a per-call id, so publishing the same
+// transition twice (a caller retry, or the checker and an API edit racing) collides on
+// the unique index instead of inserting a second row.
+func DedupKey(incidentID uint, kind string, oldStatus, newStatus event.Status, recipient string) string {
+	return fmt.Sprintf("%d:%s:%s>%s:%s", incidentID, kind, oldStatus, newStatus, recipient)
 }
 
 // link builds the maintenance deep link from the configured web origin.

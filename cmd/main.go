@@ -37,7 +37,11 @@ func main() {
 	// Wire the checker's publisher to the app's single delivery worker so
 	// checker-driven transitions wake it immediately (same shared queue).
 	if ch != nil {
-		ch.Publisher().SetNotify(s.NotifyFunc())
+		// NotifyFunc is nil when notifications are disabled; leave the publisher
+		// unwired rather than installing a nil callback.
+		if notify := s.NotifyFunc(); notify != nil {
+			ch.Publisher().SetNotify(notify)
+		}
 	}
 
 	stopCh := make(chan struct{})

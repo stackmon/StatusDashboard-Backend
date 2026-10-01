@@ -10,6 +10,7 @@ package notification
 import (
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -167,4 +168,20 @@ func splitEmails(raw string) []string {
 // normalizeEmail trims surrounding space and lowercases an address for dedup.
 func normalizeEmail(e string) string {
 	return strings.ToLower(strings.TrimSpace(e))
+}
+
+// allowedDomain reports whether a user-supplied address may receive notifications.
+// An empty allow-list permits every domain. Only the creator address is subject to
+// it; the review audience comes from trusted configuration.
+func allowedDomain(allowed []string, email string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+
+	at := strings.LastIndex(email, "@")
+	if at < 0 {
+		return false
+	}
+
+	return slices.Contains(allowed, normalizeEmail(email[at+1:]))
 }
