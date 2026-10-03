@@ -3,6 +3,7 @@ package tests
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,8 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
-	gormpostgres "gorm.io/driver/postgres"
-	"gorm.io/gorm"
 
 	"github.com/stackmon/otc-status-dashboard/internal/api"
 	apiErrors "github.com/stackmon/otc-status-dashboard/internal/api/errors"
@@ -23,14 +22,7 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/db"
 )
 
-// setOutbox mutates an outbox row by dedup key without touching updated_at
-// (UpdateColumns skips autoUpdateTime), so tests can craft ages and states.
-func setOutbox(t *testing.T, g *gorm.DB, dedup string, cols map[string]any) {
-	t.Helper()
-	require.NoError(t, g.Model(&db.NotificationOutbox{}).Where("dedup_key = ?", dedup).UpdateColumns(cols).Error)
-}
-
-func enqueueWithState(t *testing.T, d *db.DB, g *gorm.DB, incID uint, recipient string, cols map[string]any) string {
+func enqueueWithState(t *testing.T, d *db.DB, g *sql.DB, incID uint, recipient string, cols map[string]any) string {
 	t.Helper()
 	row := newOutboxRow(incID, recipient)
 	require.NoError(t, d.Enqueue(context.Background(), nil, row))
@@ -106,8 +98,7 @@ func TestRedriveFailed_AllAndByID(t *testing.T) {
 	b := enqueueWithState(t, d, g, incID, "b@com.com", failedCols)
 
 	// Re-drive only row a.
-	var rowA db.NotificationOutbox
-	require.NoError(t, g.Where("dedup_key = ?", a).First(&rowA).Error)
+	rowA := fetchByDedup(t, g, a)
 	n, err := d.RedriveFailed(ctx, rowA.ID)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), n)
@@ -143,26 +134,19 @@ func TestDeleteSentBefore(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), deleted, "only the old sent row is pruned")
 
-	var remaining int64
-	require.NoError(t, g.Model(&db.NotificationOutbox{}).Where("incident_id = ?", incID).Count(&remaining).Error)
-	assert.Equal(t, int64(2), remaining, "recent sent + failed kept")
+	assert.Equal(t, int64(2), outboxCount(t, g, int(incID)), "recent sent + failed kept")
 }
 
 // --- API endpoints ---
 
-func initNotifOpsRouter(t *testing.T) (*gin.Engine, *db.DB, *gorm.DB) {
+func initNotifOpsRouter(t *testing.T) (*gin.Engine, *db.DB, *sql.DB) {
 	t.Helper()
 
 	d, err := db.New(&conf.Config{DB: databaseURL})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = d.Close() })
 
-	g, err := gorm.Open(gormpostgres.New(gormpostgres.Config{DSN: databaseURL}), &gorm.Config{})
-	require.NoError(t, err)
-	sqlDB, err := g.DB()
-	require.NoError(t, err)
-	sqlDB.SetMaxOpenConns(2)
-	t.Cleanup(func() { _ = sqlDB.Close() })
+	g := openRawDB(t)
 
 	gin.SetMode(gin.TestMode)
 	r := gin.Default()
@@ -304,7 +288,7 @@ func TestAPI_RedriveNotifications_EmptyBodyRedrivesAll(t *testing.T) {
 	b := enqueueWithState(t, d, g, incID, "b@com.com", failedCols)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest(http.MethodPost, "/v2/notifications/redrive", nil)
+	req, _ := http.NewRequest(http.MethodPost, "/v2/notifications/redrive", http.NoBody)
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 	r.ServeHTTP(w, req)
 

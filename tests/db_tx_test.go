@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 
 	"github.com/stackmon/otc-status-dashboard/internal/db"
 	"github.com/stackmon/otc-status-dashboard/internal/event"
@@ -19,7 +18,7 @@ func TestWithTx_CommitsIncidentAndOutboxAtomically(t *testing.T) {
 	d, g := newNotifDB(t)
 
 	var incID uint
-	err := d.WithTx(ctx, func(tx *gorm.DB) error {
+	err := d.WithTx(ctx, func(tx *db.Tx) error {
 		id, e := d.SaveIncidentTx(tx, newMaintenanceIncident())
 		if e != nil {
 			return e
@@ -29,9 +28,8 @@ func TestWithTx_CommitsIncidentAndOutboxAtomically(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var incCount, outCount int64
-	require.NoError(t, g.Model(&db.Incident{}).Where("id = ?", incID).Count(&incCount).Error)
-	require.NoError(t, g.Model(&db.NotificationOutbox{}).Where("incident_id = ?", incID).Count(&outCount).Error)
+	incCount := tableCount(t, g, "incident", "id = $1", incID)
+	outCount := tableCount(t, g, "notification_outbox", "incident_id = $1", incID)
 	assert.Equal(t, int64(1), incCount)
 	assert.Equal(t, int64(1), outCount)
 }
@@ -43,7 +41,7 @@ func TestWithTx_RollsBackBothOnError(t *testing.T) {
 
 	var incID uint
 	var dedup string
-	err := d.WithTx(ctx, func(tx *gorm.DB) error {
+	err := d.WithTx(ctx, func(tx *db.Tx) error {
 		id, e := d.SaveIncidentTx(tx, newMaintenanceIncident())
 		if e != nil {
 			return e
@@ -58,9 +56,8 @@ func TestWithTx_RollsBackBothOnError(t *testing.T) {
 	})
 	require.ErrorIs(t, err, sentinel)
 
-	var incCount, outCount int64
-	require.NoError(t, g.Model(&db.Incident{}).Where("id = ?", incID).Count(&incCount).Error)
-	require.NoError(t, g.Model(&db.NotificationOutbox{}).Where("dedup_key = ?", dedup).Count(&outCount).Error)
+	incCount := tableCount(t, g, "incident", "id = $1", incID)
+	outCount := tableCount(t, g, "notification_outbox", "dedup_key = $1", dedup)
 	assert.Equal(t, int64(0), incCount, "incident rolled back")
 	assert.Equal(t, int64(0), outCount, "no orphan email task")
 }
@@ -75,7 +72,7 @@ func TestModifyIncidentTx_SharedTxWithEnqueue(t *testing.T) {
 	inc.Status = event.MaintenanceReviewed
 
 	row := newOutboxRow(incID, "creator@com.com")
-	err = d.WithTx(ctx, func(tx *gorm.DB) error {
+	err = d.WithTx(ctx, func(tx *db.Tx) error {
 		if e := d.ModifyIncidentTx(tx, inc); e != nil {
 			return e
 		}
@@ -87,8 +84,7 @@ func TestModifyIncidentTx_SharedTxWithEnqueue(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, event.MaintenanceReviewed, got.Status)
 
-	var outCount int64
-	require.NoError(t, g.Model(&db.NotificationOutbox{}).Where("dedup_key = ?", row.DedupKey).Count(&outCount).Error)
+	outCount := tableCount(t, g, "notification_outbox", "dedup_key = $1", row.DedupKey)
 	assert.Equal(t, int64(1), outCount)
 }
 
@@ -97,11 +93,18 @@ func TestModifyEventUpdateTx_UpdatesText(t *testing.T) {
 
 	incID := seedIncident(t, d)
 	// Seed one status row for the incident.
-	status := db.IncidentStatus{IncidentID: incID, Status: event.MaintenancePendingReview, Text: "original"}
-	require.NoError(t, g.Create(&status).Error)
+	statusID := insertIncidentStatus(t, g, incID, string(event.MaintenancePendingReview), "original")
 
-	updated, err := d.ModifyEventUpdateTx(g, db.IncidentStatus{
-		ID: status.ID, IncidentID: incID, Text: "patched",
+	var updated db.IncidentStatus
+	err := d.WithTx(context.Background(), func(tx *db.Tx) error {
+		u, e := d.ModifyEventUpdateTx(tx, db.IncidentStatus{
+			ID: statusID, IncidentID: incID, Text: "patched",
+		})
+		if e != nil {
+			return e
+		}
+		updated = u
+		return nil
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "patched", updated.Text)

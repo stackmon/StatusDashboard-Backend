@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"gorm.io/gorm"
-
 	"github.com/stackmon/otc-status-dashboard/internal/db"
 )
 
@@ -77,7 +75,7 @@ func (p *Publisher) Enabled() bool {
 // PublishTx enqueues one outbox row per recipient for the change, using tx so the
 // rows share the business transaction. It is a no-op when disabled or when the
 // change resolves to no recipients.
-func (p *Publisher) PublishTx(ctx context.Context, tx *gorm.DB, ch Change) error {
+func (p *Publisher) PublishTx(ctx context.Context, tx *db.Tx, ch Change) error {
 	if !p.Enabled() {
 		return nil
 	}

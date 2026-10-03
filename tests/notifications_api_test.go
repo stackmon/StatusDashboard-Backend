@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"database/sql"
 	"net/http"
 	"testing"
 
@@ -8,8 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
-	gormpostgres "gorm.io/driver/postgres"
-	"gorm.io/gorm"
 
 	"github.com/stackmon/otc-status-dashboard/internal/api"
 	apiErrors "github.com/stackmon/otc-status-dashboard/internal/api/errors"
@@ -21,21 +20,14 @@ import (
 )
 
 // initNotifRouter builds a maintenance router with a real, enabled notification
-// publisher wired into the create/patch handlers, plus a raw gorm handle to verify
+// publisher wired into the create/patch handlers, plus a raw handle to verify
 // the outbox.
-func initNotifRouter(t *testing.T) (*gin.Engine, *gorm.DB) {
+func initNotifRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 	t.Helper()
 
 	d, err := db.New(&conf.Config{DB: databaseURL})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = d.Close() })
-
-	g, err := gorm.Open(gormpostgres.New(gormpostgres.Config{DSN: databaseURL}), &gorm.Config{})
-	require.NoError(t, err)
-	sqlDB, err := g.DB()
-	require.NoError(t, err)
-	sqlDB.SetMaxOpenConns(2)
-	t.Cleanup(func() { _ = sqlDB.Close() })
 
 	pub := notification.NewPublisher(notification.Config{
 		Enabled:         true,
@@ -70,25 +62,7 @@ func initNotifRouter(t *testing.T) (*gin.Engine, *gorm.DB) {
 		api.CheckEventExistenceMW(d, logger),
 		v2.PatchIncidentHandler(d, logger, pub))
 
-	return r, g
-}
-
-func outboxRecipients(t *testing.T, g *gorm.DB, incidentID int) []string {
-	t.Helper()
-	var rows []db.NotificationOutbox
-	require.NoError(t, g.Where("incident_id = ?", incidentID).Find(&rows).Error)
-	out := make([]string, 0, len(rows))
-	for i := range rows {
-		out = append(out, rows[i].Recipient)
-	}
-	return out
-}
-
-func outboxCount(t *testing.T, g *gorm.DB, incidentID int) int64 {
-	t.Helper()
-	var n int64
-	require.NoError(t, g.Model(&db.NotificationOutbox{}).Where("incident_id = ?", incidentID).Count(&n).Error)
-	return n
+	return r, openRawDB(t)
 }
 
 func TestAPI_CreatorCreateMaintenance_EnqueuesReviewAudienceAndCreator(t *testing.T) {

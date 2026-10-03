@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/stackmon/otc-status-dashboard/internal/db"
 	"github.com/stackmon/otc-status-dashboard/internal/notification"
@@ -63,13 +62,6 @@ func testWorker(t *testing.T, d *db.DB, sender notification.Sender, maxAttempts 
 	return w
 }
 
-func fetchByDedup(t *testing.T, g *gorm.DB, dedup string) db.NotificationOutbox {
-	t.Helper()
-	var row db.NotificationOutbox
-	require.NoError(t, g.Where("dedup_key = ?", dedup).First(&row).Error)
-	return row
-}
-
 func TestWorker_DeliversAllPending(t *testing.T) {
 	truncateIncidents(t)
 	ctx := context.Background()
@@ -86,11 +78,7 @@ func TestWorker_DeliversAllPending(t *testing.T) {
 
 	assert.ElementsMatch(t, recipients, fake.recipients())
 
-	var notSent int64
-	require.NoError(t, g.Model(&db.NotificationOutbox{}).
-		Where("incident_id = ? AND status <> ?", incID, db.NotificationStatusSent).
-		Count(&notSent).Error)
-	assert.Equal(t, int64(0), notSent, "all rows delivered")
+	assert.Equal(t, int64(0), outboxNotSentCount(t, g, int(incID)), "all rows delivered")
 }
 
 func TestWorker_FailedSendRetriesWithBackoff(t *testing.T) {

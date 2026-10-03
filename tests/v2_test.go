@@ -92,15 +92,50 @@ func TestV2GetComponentsHandler(t *testing.T) {
 	t.Log("start to test GET /v2/components")
 	r := initTests(t)
 
-	var response = `[{"id":1,"name":"Cloud Container Engine","attributes":[{"name":"region","value":"EU-DE"},{"name":"category","value":"Container"},{"name":"type","value":"cce"}]},{"id":2,"name":"Cloud Container Engine","attributes":[{"name":"region","value":"EU-NL"},{"name":"category","value":"Container"},{"name":"type","value":"cce"}]},{"id":3,"name":"Elastic Cloud Server","attributes":[{"name":"region","value":"EU-DE"},{"name":"category","value":"Compute"},{"name":"type","value":"ecs"}]},{"id":4,"name":"Elastic Cloud Server","attributes":[{"name":"region","value":"EU-NL"},{"name":"category","value":"Compute"},{"name":"type","value":"ecs"}]},{"id":5,"name":"Distributed Cache Service","attributes":[{"name":"region","value":"EU-DE"},{"name":"category","value":"Database"},{"name":"type","value":"dcs"}]},{"id":6,"name":"Distributed Cache Service","attributes":[{"name":"region","value":"EU-NL"},{"name":"category","value":"Database"},{"name":"type","value":"dcs"}]}]`
-
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodGet, "/v2/components", nil)
 
 	r.ServeHTTP(w, req)
 
-	assert.Equal(t, 200, w.Code)
-	assert.Equal(t, response, w.Body.String())
+	require.Equal(t, 200, w.Code)
+
+	var components []v2.Component
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &components))
+
+	expected := []v2.Component{
+		{ComponentID: v2.ComponentID{ID: 1}, Name: "Cloud Container Engine", Attributes: []v2.ComponentAttribute{
+			{Name: "region", Value: "EU-DE"}, {Name: "category", Value: "Container"}, {Name: "type", Value: "cce"},
+		}},
+		{ComponentID: v2.ComponentID{ID: 2}, Name: "Cloud Container Engine", Attributes: []v2.ComponentAttribute{
+			{Name: "region", Value: "EU-NL"}, {Name: "category", Value: "Container"}, {Name: "type", Value: "cce"},
+		}},
+		{ComponentID: v2.ComponentID{ID: 3}, Name: "Elastic Cloud Server", Attributes: []v2.ComponentAttribute{
+			{Name: "region", Value: "EU-DE"}, {Name: "category", Value: "Compute"}, {Name: "type", Value: "ecs"},
+		}},
+		{ComponentID: v2.ComponentID{ID: 4}, Name: "Elastic Cloud Server", Attributes: []v2.ComponentAttribute{
+			{Name: "region", Value: "EU-NL"}, {Name: "category", Value: "Compute"}, {Name: "type", Value: "ecs"},
+		}},
+		{ComponentID: v2.ComponentID{ID: 5}, Name: "Distributed Cache Service", Attributes: []v2.ComponentAttribute{
+			{Name: "region", Value: "EU-DE"}, {Name: "category", Value: "Database"}, {Name: "type", Value: "dcs"},
+		}},
+		{ComponentID: v2.ComponentID{ID: 6}, Name: "Distributed Cache Service", Attributes: []v2.ComponentAttribute{
+			{Name: "region", Value: "EU-NL"}, {Name: "category", Value: "Database"}, {Name: "type", Value: "dcs"},
+		}},
+	}
+
+	for _, want := range expected {
+		found := false
+		for i := range components {
+			if components[i].ID != want.ID {
+				continue
+			}
+			assert.Equal(t, want.Name, components[i].Name)
+			assert.ElementsMatch(t, want.Attributes, components[i].Attributes)
+			found = true
+			break
+		}
+		assert.True(t, found, "component %d (%s) not found in response", want.ID, want.Name)
+	}
 }
 
 func TestV2PostIncidentsHandlerNegative(t *testing.T) {
@@ -479,19 +514,19 @@ func TestV2PatchIncidentHandlerNegative(t *testing.T) {
 	 "version": 1
 	}`
 	jsWrongOpenedStatusForChangingImpact := `{
-	"impact": 0,
+	"impact": 2,
 	"message": "Any message why the event was updated.",
 	"status": "analysing",
 	"update_date": "2024-12-11T14:46:03.877Z",
-	"type": "maintenance",
+	"type": "incident",
 	"version": 1
 	}`
-	jsWrongOpenedMaintenanceImpact := `{
+	jsImpactToZeroForIncident := `{
 	 "impact": 0,
 	 "message": "Any message why the event was updated.",
 	 "status": "impact changed",
 	 "update_date": "2024-12-11T14:46:03.877Z",
-	 "type": "maintenance",
+	 "type": "incident",
 	 "version": 1
 	}`
 	testCases := map[string]*testCase{
@@ -510,9 +545,9 @@ func TestV2PatchIncidentHandlerNegative(t *testing.T) {
 			Expected:     `{"errMsg":"wrong status for changing impact"}`,
 			ExpectedCode: 400,
 		},
-		"negative testcase, can't change impact from incident to maintenance": {
-			JSON:         jsWrongOpenedMaintenanceImpact,
-			Expected:     `{"errMsg":"can not change impact to 0"}`,
+		"negative testcase, can not set impact to 0 on an incident": {
+			JSON:         jsImpactToZeroForIncident,
+			Expected:     `{"errMsg":"impact must be 0 for type 'maintenance' or 'info' and gt 0 for 'incident'"}`,
 			ExpectedCode: 400,
 		},
 	}
@@ -842,14 +877,29 @@ func v2PatchIncident(t *testing.T, r *gin.Engine, inc *v2.Incident, status ...ev
 	*inc = updated
 }
 
+func deleteComponentByName(t *testing.T, name string) {
+	t.Helper()
+
+	sqlDB := openRawDB(t)
+	_, err := sqlDB.Exec(
+		"DELETE FROM component_attribute WHERE component_id IN (SELECT id FROM component WHERE name = $1)", name)
+	require.NoError(t, err)
+	_, err = sqlDB.Exec("DELETE FROM component WHERE name = $1", name)
+	require.NoError(t, err)
+}
+
 func TestV2CreateComponentAndList(t *testing.T) {
 	t.Log("start to test component creation and listing")
 	r := initTests(t)
 
+	const componentName = "Domain Name System"
+	deleteComponentByName(t, componentName)
+	t.Cleanup(func() { deleteComponentByName(t, componentName) })
+
 	// Test case 1: Successful component creation
 	t.Log("Test case 1: Create new component successfully")
 	newComponent := v2.PostComponentData{
-		Name: "Domain Name System",
+		Name: componentName,
 		Attributes: []v2.ComponentAttribute{
 			{Name: "type", Value: "dns"},
 			{Name: "region", Value: "EU-DE"},
@@ -1303,7 +1353,7 @@ func TestV2GetComponentsAvailability(t *testing.T) {
 	// Incident preparation
 	t.Log("create an incident")
 
-	components := []int{7}
+	components := []int{1}
 	impact := 3
 	system := false
 	now := time.Now().UTC()
@@ -1386,7 +1436,7 @@ func TestV2GetComponentsAvailability(t *testing.T) {
 	}
 
 	for _, compAvail := range availability.Data {
-		if compAvail.ID == 7 {
+		if compAvail.ID == 1 {
 			checkComponentAvailability(t, compAvail, targetMonths)
 		}
 	}

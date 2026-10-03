@@ -30,6 +30,17 @@ jobs:
         with:
           version: ${{ env.GO_LINT }}
 
+  ent-codegen:
+    name: ent-codegen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - run: go generate ./ent
+      - run: git diff --exit-code -- ent/
+
   test:
     name: go-test
     runs-on: ubuntu-latest
@@ -39,3 +50,31 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
       - run: make test
+
+  test-acc:
+    name: go-test-acc
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: pg
+          POSTGRES_PASSWORD: pass
+          POSTGRES_DB: status_dashboard
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pg"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SD_TEST_DSN: postgres://pg:pass@localhost:5432/status_dashboard?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Load the test fixture
+        run: psql "$SD_TEST_DSN" -v ON_ERROR_STOP=1 -q -f tests/testdata/dump_test.sql
+      - run: make test-acc

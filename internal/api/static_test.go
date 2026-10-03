@@ -14,6 +14,9 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/db"
 )
 
+// unreachableDSN lets tests build a *db.DB without opening a connection.
+const unreachableDSN = "postgres://postgres:postgres@127.0.0.1:1/postgres?sslmode=disable"
+
 const staticTestSpec = `openapi: 3.0.0
 info:
   title: status dashboard
@@ -28,8 +31,9 @@ func newStaticRouter(t *testing.T, staticCfg conf.Static) *gin.Engine {
 
 	idp := newTestIDP(t)
 
-	database, _, err := db.NewWithMock()
+	database, err := db.New(&conf.Config{DB: unreachableDSN})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
 
 	cfg := &conf.Config{
 		Port:            "8000",
@@ -72,8 +76,9 @@ func TestCatchAllWithoutStaticOrigins(t *testing.T) {
 func TestNewRejectsUnusableStaticConfiguration(t *testing.T) {
 	idp := newTestIDP(t)
 
-	database, _, err := db.NewWithMock()
+	database, err := db.New(&conf.Config{DB: unreachableDSN})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
 
 	cfg := &conf.Config{
 		Port:            "8000",
