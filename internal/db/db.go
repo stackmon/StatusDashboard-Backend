@@ -10,6 +10,7 @@ import (
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 
+	// Registered for its side effect: sql.Open("pgx", ...) needs the pgx database/sql driver.
 	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/stackmon/otc-status-dashboard/ent"
@@ -397,13 +398,39 @@ func (db *DB) modifyIncident(ctx context.Context, c *ent.Client, inc *Incident) 
 
 	now := time.Now().UTC()
 
-	// A struct-based update writes the non-zero fields only, so nil pointers and
-	// empty scalars are left untouched, mirroring the previous ORM behaviour.
 	update := c.Incident.Update().Where(incident.IDEQ(int(inc.ID)))
 	if inc.Type == event.TypeMaintenance {
 		update.Where(incident.VersionEQ(expectedVersion))
 	}
+	applyIncidentPatch(update, inc)
+	update.SetVersion(newVersion).SetModifiedAt(now)
 
+	affected, err := update.Save(ctx)
+	if err != nil {
+		return err
+	}
+	if inc.Type == event.TypeMaintenance && affected == 0 {
+		return ErrVersionConflict
+	}
+
+	for i := range inc.Statuses {
+		if inc.Statuses[i].ID != 0 {
+			continue
+		}
+		id, errStatus := insertIncidentStatus(ctx, c, &inc.Statuses[i], inc.ID)
+		if errStatus != nil {
+			return errStatus
+		}
+		inc.Statuses[i].ID = uint(id)
+		inc.Statuses[i].IncidentID = inc.ID
+	}
+
+	return nil
+}
+
+// applyIncidentPatch sets the non-zero fields only, so nil pointers and empty
+// scalars are left untouched, mirroring the previous ORM behaviour.
+func applyIncidentPatch(update *ent.IncidentUpdate, inc *Incident) {
 	if inc.Text != nil {
 		update.SetText(*inc.Text)
 	}
@@ -437,29 +464,6 @@ func (db *DB) modifyIncident(ctx context.Context, c *ent.Client, inc *Incident) 
 	if inc.ContactEmail != nil {
 		update.SetContactEmail(*inc.ContactEmail)
 	}
-	update.SetVersion(newVersion).SetModifiedAt(now)
-
-	affected, err := update.Save(ctx)
-	if err != nil {
-		return err
-	}
-	if inc.Type == event.TypeMaintenance && affected == 0 {
-		return ErrVersionConflict
-	}
-
-	for i := range inc.Statuses {
-		if inc.Statuses[i].ID != 0 {
-			continue
-		}
-		id, errStatus := insertIncidentStatus(ctx, c, &inc.Statuses[i], inc.ID)
-		if errStatus != nil {
-			return errStatus
-		}
-		inc.Statuses[i].ID = uint(id)
-		inc.Statuses[i].IncidentID = inc.ID
-	}
-
-	return nil
 }
 
 // AddComponentToIncident adds a component and a status update to an incident using optimistic locking.
@@ -623,36 +627,6 @@ func (db *DB) GetIncidentsByComponentAttr(attr *ComponentAttr, params ...*Incide
 	}
 
 	return db.incidentsByIDs(ctx, ids)
-}
-
-func (db *DB) GetOpenedIncidentsWithComponent(_ string, _ []ComponentAttr) (*Incident, error) {
-	ctx := context.Background()
-
-	// Legacy behaviour kept as-is: the component probe is not restricted to any
-	// name or attribute and the incident lookup carries no component filter, so
-	// this returns an arbitrary open incident.
-	if _, err := db.e.Component.Query().Exist(ctx); err != nil {
-		return nil, err
-	}
-
-	e, err := db.e.Incident.Query().
-		WithComponents(func(q *ent.ComponentQuery) {
-			q.Select(component.FieldID)
-		}).
-		Order(incident.ByID(entsql.OrderAsc())).
-		First(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	inc := incidentFromEnt(e)
-	grouped, err := db.statusesByIncident(ctx, []int{e.ID})
-	if err != nil {
-		return nil, err
-	}
-	attachStatuses([]*Incident{inc}, grouped)
-
-	return inc, nil
 }
 
 func (db *DB) GetComponent(id int) (*Component, error) {

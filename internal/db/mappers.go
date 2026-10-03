@@ -109,6 +109,10 @@ func componentAttrFromEnt(e *ent.ComponentAttr) ComponentAttr {
 	}
 }
 
+// incidentStatusChunkSize caps the IN predicate because PostgreSQL rejects
+// queries with more than 65535 bound parameters.
+const incidentStatusChunkSize = 1000
+
 // statusesByIncident loads the update history for the given incidents. The Ent
 // schema has no status edge (production carries no foreign key on
 // incident_status), so callers attach the result themselves.
@@ -118,16 +122,20 @@ func (db *DB) statusesByIncident(ctx context.Context, ids []int) (map[int][]Inci
 		return grouped, nil
 	}
 
-	rows, err := db.e.IncidentStatus.Query().
-		Where(incidentstatus.IncidentIDIn(ids...)).
-		Order(incidentstatus.ByID(entsql.OrderAsc())).
-		All(ctx)
-	if err != nil {
-		return nil, err
-	}
+	for start := 0; start < len(ids); start += incidentStatusChunkSize {
+		end := min(start+incidentStatusChunkSize, len(ids))
 
-	for _, r := range rows {
-		grouped[r.IncidentID] = append(grouped[r.IncidentID], incidentStatusFromEnt(r))
+		rows, err := db.e.IncidentStatus.Query().
+			Where(incidentstatus.IncidentIDIn(ids[start:end]...)).
+			Order(incidentstatus.ByID(entsql.OrderAsc())).
+			All(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, r := range rows {
+			grouped[r.IncidentID] = append(grouped[r.IncidentID], incidentStatusFromEnt(r))
+		}
 	}
 
 	return grouped, nil

@@ -56,41 +56,44 @@ func (db *DB) Enqueue(ctx context.Context, tx *Tx, row NotificationOutbox) error
 			return ErrNotificationDuplicate
 		}
 
-		create := c.NotificationOutbox.Create().
-			SetKind(row.Kind).
-			SetIncidentID(int(row.IncidentID)).
-			SetRecipient(row.Recipient).
-			SetPayload(row.Payload).
-			SetChangeID(row.ChangeID).
-			SetDedupKey(row.DedupKey)
-		if row.Status != "" {
-			create.SetStatus(row.Status)
-		}
-		if row.Attempts != 0 {
-			create.SetAttempts(row.Attempts)
-		}
-		if row.NextAttemptAt != nil {
-			create.SetNextAttemptAt(*row.NextAttemptAt)
-		}
-		if row.LockedBy != nil {
-			create.SetLockedBy(*row.LockedBy)
-		}
-		if row.LockedAt != nil {
-			create.SetLockedAt(*row.LockedAt)
-		}
-		if row.LastError != nil {
-			create.SetLastError(*row.LastError)
-		}
-		if !row.CreatedAt.IsZero() {
-			create.SetCreatedAt(row.CreatedAt)
-		}
-		if !row.UpdatedAt.IsZero() {
-			create.SetUpdatedAt(row.UpdatedAt)
-		}
-
-		_, err = create.Save(ctx)
+		_, err = newOutboxCreate(c, row).Save(ctx)
 		return err
 	})
+}
+
+func newOutboxCreate(c *ent.Client, row NotificationOutbox) *ent.NotificationOutboxCreate {
+	create := c.NotificationOutbox.Create().
+		SetKind(row.Kind).
+		SetIncidentID(int(row.IncidentID)).
+		SetRecipient(row.Recipient).
+		SetPayload(row.Payload).
+		SetChangeID(row.ChangeID).
+		SetDedupKey(row.DedupKey)
+	if row.Status != "" {
+		create.SetStatus(row.Status)
+	}
+	if row.Attempts != 0 {
+		create.SetAttempts(row.Attempts)
+	}
+	if row.NextAttemptAt != nil {
+		create.SetNextAttemptAt(*row.NextAttemptAt)
+	}
+	if row.LockedBy != nil {
+		create.SetLockedBy(*row.LockedBy)
+	}
+	if row.LockedAt != nil {
+		create.SetLockedAt(*row.LockedAt)
+	}
+	if row.LastError != nil {
+		create.SetLastError(*row.LastError)
+	}
+	if !row.CreatedAt.IsZero() {
+		create.SetCreatedAt(row.CreatedAt)
+	}
+	if !row.UpdatedAt.IsZero() {
+		create.SetUpdatedAt(row.UpdatedAt)
+	}
+	return create
 }
 
 // ClaimPending claims a batch of due rows for processing.

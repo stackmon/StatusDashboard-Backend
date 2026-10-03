@@ -73,19 +73,34 @@ func dropIncidentComponent(inc *Incident, componentID uint) {
 	inc.Components = kept
 }
 
-// saveIncidentFull writes every incident column and upserts the assocations, which
-// is what the previous ORM Save did for these flows: nil optional values clear the
-// column instead of being skipped.
+// saveIncidentFull writes every incident column and reconciles the component
+// associations. nil optional values clear the column instead of being skipped.
 func saveIncidentFull(ctx context.Context, c *ent.Client, inc *Incident) error {
+	if inc.StartDate == nil {
+		return ErrIncidentStartDateRequired
+	}
+
 	update := c.Incident.UpdateOneID(int(inc.ID)).
 		SetText(valueOr(inc.Text, "")).
-		SetStartDate(valueOr(inc.StartDate, time.Time{})).
+		SetStartDate(*inc.StartDate).
 		SetImpact(valueOr(inc.Impact, 0)).
 		SetSystem(inc.System).
 		SetType(incident.Type(inc.Type)).
 		SetStatus(string(inc.Status)).
 		SetVersion(valueOr(inc.Version, 1))
 
+	applyIncidentOptionalColumns(update, inc)
+
+	if _, err := update.Save(ctx); err != nil {
+		return err
+	}
+	if err := reconcileIncidentComponents(ctx, c, inc); err != nil {
+		return err
+	}
+	return insertNewIncidentStatuses(ctx, c, inc)
+}
+
+func applyIncidentOptionalColumns(update *ent.IncidentUpdateOne, inc *Incident) {
 	if inc.Description != nil {
 		update.SetDescription(*inc.Description)
 	} else {
@@ -121,23 +136,63 @@ func saveIncidentFull(ctx context.Context, c *ent.Client, inc *Incident) error {
 	} else {
 		update.ClearContactEmail()
 	}
+}
 
-	if _, err := update.Save(ctx); err != nil {
+// reconcileIncidentComponents makes the stored component edge match inc.Components
+// exactly; every incident read loads the edge unfiltered, so inc.Components is the
+// full authoritative set.
+func reconcileIncidentComponents(ctx context.Context, c *ent.Client, inc *Incident) error {
+	want := make(map[int]struct{}, len(inc.Components))
+	for i := range inc.Components {
+		if inc.Components[i].ID != 0 {
+			want[int(inc.Components[i].ID)] = struct{}{}
+		}
+	}
+
+	currentIDs, err := c.Incident.Query().
+		Where(incident.IDEQ(int(inc.ID))).
+		QueryComponents().
+		IDs(ctx)
+	if err != nil {
 		return err
 	}
 
-	componentIDs := make([]int, 0, len(inc.Components))
-	for i := range inc.Components {
-		if inc.Components[i].ID != 0 {
-			componentIDs = append(componentIDs, int(inc.Components[i].ID))
-		}
-	}
-	if len(componentIDs) > 0 {
-		if _, err := c.Incident.UpdateOneID(int(inc.ID)).AddComponentIDs(componentIDs...).Save(ctx); err != nil {
-			return err
+	current := make(map[int]struct{}, len(currentIDs))
+	var extra []int
+	for _, id := range currentIDs {
+		current[id] = struct{}{}
+		if _, ok := want[id]; !ok {
+			extra = append(extra, id)
 		}
 	}
 
+	var missing []int
+	for i := range inc.Components {
+		id := int(inc.Components[i].ID)
+		if id == 0 {
+			continue
+		}
+		if _, ok := current[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+
+	if len(extra) == 0 && len(missing) == 0 {
+		return nil
+	}
+
+	update := c.Incident.UpdateOneID(int(inc.ID))
+	if len(extra) > 0 {
+		update.RemoveComponentIDs(extra...)
+	}
+	if len(missing) > 0 {
+		update.AddComponentIDs(missing...)
+	}
+	_, err = update.Save(ctx)
+	return err
+}
+
+func insertNewIncidentStatuses(ctx context.Context, c *ent.Client, inc *Incident) error {
 	for i := range inc.Statuses {
 		if inc.Statuses[i].ID != 0 {
 			continue
@@ -149,7 +204,6 @@ func saveIncidentFull(ctx context.Context, c *ent.Client, inc *Incident) error {
 		inc.Statuses[i].ID = uint(id)
 		inc.Statuses[i].IncidentID = inc.ID
 	}
-
 	return nil
 }
 
