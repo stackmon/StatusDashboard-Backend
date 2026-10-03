@@ -1288,10 +1288,6 @@ func checkPatchDataForIncident(incoming *PatchIncidentData, stored *db.Incident)
 		return apiErrors.ErrIncidentPatchImpactStatusWrong
 	}
 
-	if incoming.Impact != nil && *incoming.Impact != *stored.Impact && *incoming.Impact == 0 {
-		return apiErrors.ErrIncidentPatchImpactToZeroForbidden
-	}
-
 	if incoming.StartDate != nil {
 		return apiErrors.ErrIncidentPatchOpenedStartDate
 	}
