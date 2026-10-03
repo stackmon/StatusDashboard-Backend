@@ -362,19 +362,19 @@ func TestV2PatchEventHandlerNegative(t *testing.T) {
  "version": %d
 }`, version)
 	jsWrongOpenedStatusForChangingImpact := fmt.Sprintf(`{
-"impact": 0,
+"impact": 2,
 "message": "Any message why the event was updated.",
 "status": "analysing",
 "update_date": "2024-12-11T14:46:03.877Z",
-"type": "maintenance",
+"type": "incident",
 "version": %d
 }`, version)
-	jsWrongOpenedMaintenanceImpact := fmt.Sprintf(`{
+	jsImpactToZeroForIncident := fmt.Sprintf(`{
  "impact": 0,
  "message": "Any message why the event was updated.",
  "status": "impact changed",
  "update_date": "2024-12-11T14:46:03.877Z",
- "type": "maintenance",
+ "type": "incident",
  "version": %d
 }`, version)
 	testCases := map[string]*testCase{
@@ -393,9 +393,9 @@ func TestV2PatchEventHandlerNegative(t *testing.T) {
 			Expected:     `{"errMsg":"wrong status for changing impact"}`,
 			ExpectedCode: 400,
 		},
-		"negative testcase, can't change impact from incident to maintenance": {
-			JSON:         jsWrongOpenedMaintenanceImpact,
-			Expected:     `{"errMsg":"can not change impact to 0"}`,
+		"negative testcase, can not set impact to 0 on an incident": {
+			JSON:         jsImpactToZeroForIncident,
+			Expected:     `{"errMsg":"impact must be 0 for type 'maintenance' or 'info' and gt 0 for 'incident'"}`,
 			ExpectedCode: 400,
 		},
 	}
