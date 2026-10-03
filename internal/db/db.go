@@ -2,23 +2,22 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
-	"go.uber.org/zap"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
-	"moul.io/zapgorm2"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/stackmon/otc-status-dashboard/ent"
 	"github.com/stackmon/otc-status-dashboard/ent/component"
 	"github.com/stackmon/otc-status-dashboard/ent/componentattr"
 	"github.com/stackmon/otc-status-dashboard/ent/incident"
 	"github.com/stackmon/otc-status-dashboard/ent/incidentstatus"
+	"github.com/stackmon/otc-status-dashboard/ent/predicate"
 	"github.com/stackmon/otc-status-dashboard/internal/conf"
 	"github.com/stackmon/otc-status-dashboard/internal/event"
 )
@@ -33,37 +32,16 @@ const (
 	dbConnMaxIdleTime = 30 * time.Second
 )
 
-// DB is the storage facade. Both ORMs share one connection pool: methods that
-// have been migrated run on Ent, the rest still run on GORM.
+// DB is the storage facade over the Ent client and its connection pool.
 type DB struct {
-	g *gorm.DB
-	e *ent.Client
+	sql *sql.DB
+	e   *ent.Client
 }
 
 func New(c *conf.Config) (*DB, error) {
-	psql := postgres.New(postgres.Config{
-		DSN: c.DB,
-	})
-
-	gConf := &gorm.Config{
-		NowFunc: func() time.Time {
-			return time.Now().UTC()
-		},
-	}
-
-	if c.LogLevel != conf.DevelopMode {
-		logger := zapgorm2.New(zap.L())
-		gConf.Logger = logger
-	}
-
-	g, err := gorm.Open(psql, gConf)
+	sqlDB, err := sql.Open("pgx", c.DB)
 	if err != nil {
 		return nil, err
-	}
-
-	sqlDB, err := g.DB()
-	if err != nil {
-		return nil, fmt.Errorf("getting underlying sql.DB: %w", err)
 	}
 
 	sqlDB.SetMaxOpenConns(dbMaxOpenConns)
@@ -73,15 +51,11 @@ func New(c *conf.Config) (*DB, error) {
 
 	e := ent.NewClient(ent.Driver(entsql.OpenDB(dialect.Postgres, sqlDB)))
 
-	return &DB{g: g, e: e}, nil
+	return &DB{sql: sqlDB, e: e}, nil
 }
 
 func (db *DB) Close() error {
-	sqlDB, err := db.g.DB()
-	if err != nil {
-		return err
-	}
-	return sqlDB.Close()
+	return db.sql.Close()
 }
 
 type IncidentsParams struct {
@@ -98,22 +72,27 @@ type IncidentsParams struct {
 	Page         *int
 }
 
-func applyEventsFilters(base *gorm.DB, params *IncidentsParams, isAuth bool) (*gorm.DB, error) {
+func applyEventsFilters(params *IncidentsParams, isAuth bool) ([]predicate.Incident, error) {
+	var preds []predicate.Incident
+
 	if params.Types != nil {
-		base = base.Where("incident.type IN (?)", params.Types)
+		types := make([]incident.Type, 0, len(params.Types))
+		for _, t := range params.Types {
+			types = append(types, incident.Type(t))
+		}
+		preds = append(preds, incident.TypeIn(types...))
 	}
 
 	if params.Impact != nil {
-		base = base.Where("incident.impact = ?", *params.Impact)
+		preds = append(preds, incident.ImpactEQ(*params.Impact))
 	}
 
 	if params.IsSystem != nil {
-		base = base.Where("incident.system = ?", *params.IsSystem)
+		preds = append(preds, incident.SystemEQ(*params.IsSystem))
 	}
 
 	if len(params.ComponentIDs) > 0 {
-		base = base.Joins("JOIN incident_component_relation icr ON icr.incident_id = incident.id").
-			Where("icr.component_id IN (?)", params.ComponentIDs).Group("incident.id")
+		preds = append(preds, incident.HasComponentsWith(component.IDIn(params.ComponentIDs...)))
 	}
 
 	// it's a special case for active events
@@ -122,124 +101,139 @@ func applyEventsFilters(base *gorm.DB, params *IncidentsParams, isAuth bool) (*g
 			return nil, ErrDBIncidentFilterActiveFalse //nolint:wrapcheck
 		}
 		currentTime := time.Now().UTC()
-		base = base.Where("(incident.end_date IS NULL) OR "+
-			"(incident.start_date <= ? AND "+
-			"incident.end_date >= ? AND "+
-			"incident.status NOT IN (?))",
-			currentTime,
-			currentTime,
-			[]event.Status{event.IncidentResolved,
-				event.MaintenanceCompleted,
-				event.MaintenanceCancelled,
-				event.MaintenancePendingReview,
-				event.MaintenanceReviewed,
-				event.InfoCompleted,
-				event.InfoCancelled})
+		preds = append(preds, incident.Or(
+			incident.EndDateIsNil(),
+			incident.And(
+				incident.StartDateLTE(currentTime),
+				incident.EndDateGTE(currentTime),
+				incident.StatusNotIn(
+					string(event.IncidentResolved),
+					string(event.MaintenanceCompleted),
+					string(event.MaintenanceCancelled),
+					string(event.MaintenancePendingReview),
+					string(event.MaintenanceReviewed),
+					string(event.InfoCompleted),
+					string(event.InfoCancelled),
+				),
+			),
+		))
 	}
 
 	if params.Status != nil {
-		base = base.Where("incident.status = ?", params.Status)
+		preds = append(preds, incident.StatusEQ(string(*params.Status)))
 	}
 
 	switch {
 	case params.StartDate != nil && params.EndDate != nil:
-		base = base.Where("incident.start_date >= ? AND incident.end_date <= ?", *params.StartDate, *params.EndDate)
+		preds = append(preds,
+			incident.StartDateGTE(*params.StartDate),
+			incident.EndDateLTE(*params.EndDate))
 	case params.StartDate != nil && params.EndDate == nil:
-		base = base.Where("incident.start_date >= ?", *params.StartDate)
+		preds = append(preds, incident.StartDateGTE(*params.StartDate))
 	case params.EndDate != nil && params.StartDate == nil:
-		base = base.Where("incident.end_date <= ?", *params.EndDate)
+		preds = append(preds, incident.EndDateLTE(*params.EndDate))
 	}
 
 	if !isAuth {
-		base = base.Where(
-			"NOT (incident.type = ? AND incident.status IN (?, ?))",
-			event.TypeMaintenance, event.MaintenancePendingReview, event.MaintenanceReviewed,
-		)
-		// Hide cancelled maintenance events that never reached a public status (planned or later).
-		base = base.Where(
-			"NOT (incident.type = ? AND incident.status = ? AND "+
-				"NOT EXISTS (SELECT 1 FROM incident_status WHERE incident_status.incident_id = incident.id "+
-				"AND incident_status.status IN (?, ?, ?, ?)))",
-			event.TypeMaintenance, event.MaintenanceCancelled,
-			event.MaintenancePlanned, event.MaintenanceInProgress, event.MaintenanceModified, event.MaintenanceCompleted,
-		)
+		preds = append(preds, publicEventPredicates()...)
 	}
 
-	return base, nil
+	return preds, nil
 }
 
-func (db *DB) fetchPaginatedEvents(filteredBase *gorm.DB, param *IncidentsParams) ([]*Incident, error) {
-	var events []*Incident
-
-	subQuery := filteredBase.
-		Select("incident.id").
-		Order("incident.start_date DESC").
-		Limit(*param.Limit)
-
-	if param.Page != nil && *param.Page > 1 {
-		subQuery = subQuery.Offset((*param.Page - 1) * *param.Limit)
+// publicEventPredicates hides maintenance awaiting review and cancelled
+// maintenance that never reached a public status.
+func publicEventPredicates() []predicate.Incident {
+	return []predicate.Incident{
+		incident.Not(incident.And(
+			incident.TypeEQ(incident.TypeMaintenance),
+			incident.StatusIn(
+				string(event.MaintenancePendingReview),
+				string(event.MaintenanceReviewed),
+			),
+		)),
+		incident.Not(incident.And(
+			incident.TypeEQ(incident.TypeMaintenance),
+			incident.StatusEQ(string(event.MaintenanceCancelled)),
+			noPublicStatus(),
+		)),
 	}
-
-	r := db.g.Model(&Incident{}).
-		Joins("JOIN (?) AS filtered_ids ON filtered_ids.id = incident.id", subQuery).
-		Preload("Statuses").
-		Preload("Components", func(db *gorm.DB) *gorm.DB { return db.Select("ID, Name") }).
-		Preload("Components.Attrs").
-		Order("incident.start_date DESC")
-
-	if err := r.Find(&events).Error; err != nil {
-		return nil, err
-	}
-	return events, nil
 }
 
-func (db *DB) fetchUnpaginatedEvents(filteredBase *gorm.DB, param *IncidentsParams) ([]*Incident, error) {
-	var events []*Incident
-
-	r := filteredBase.Order("incident.start_date DESC")
-	if param.LastCount > 0 {
-		r = r.Limit(param.LastCount)
+// noPublicStatus matches events without any public maintenance update. Ent has no
+// edge to incident_status (production carries no foreign key on it), so the
+// correlated subquery stays raw.
+func noPublicStatus() predicate.Incident {
+	return func(s *entsql.Selector) {
+		s.Where(entsql.P(func(b *entsql.Builder) {
+			b.WriteString(`NOT EXISTS (SELECT 1 FROM "incident_status" WHERE ` +
+				`"incident_status"."incident_id" = "incident"."id" AND "incident_status"."status" IN (`)
+			b.Args(
+				string(event.MaintenancePlanned),
+				string(event.MaintenanceInProgress),
+				string(event.MaintenanceModified),
+				string(event.MaintenanceCompleted),
+			)
+			b.WriteString("))")
+		}))
 	}
-	if err := r.Preload("Statuses").
-		Preload("Components", func(db *gorm.DB) *gorm.DB { return db.Select("ID, Name") }).
-		Preload("Components.Attrs").
-		Find(&events).Error; err != nil {
-		return nil, err
-	}
-	return events, nil
 }
 
 // GetEventsWithCount retrieves events based on the provided parameters, with pagination and total count.
 func (db *DB) GetEventsWithCount(isAuth bool, params ...*IncidentsParams) ([]*Incident, int64, error) {
 	var param IncidentsParams
-	var total int64
-	var events []*Incident
 	if len(params) > 0 && params[0] != nil {
 		param = *params[0]
 	}
 
-	// Base query for filtering
-	base := db.g.Model(&Incident{})
+	ctx := context.Background()
 
-	filteredBase, err := applyEventsFilters(base, &param, isAuth)
+	preds, err := applyEventsFilters(&param, isAuth)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	// Get total count before applying limit and offset.
-	if err = filteredBase.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-
-	if param.Limit != nil && *param.Limit > 0 {
-		events, err = db.fetchPaginatedEvents(filteredBase, &param)
-	} else {
-		events, err = db.fetchUnpaginatedEvents(filteredBase, &param)
-	}
-
+	count, err := db.e.Incident.Query().Where(preds...).Count(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
+	total := int64(count)
+
+	query := db.e.Incident.Query().
+		Where(preds...).
+		WithComponents(func(q *ent.ComponentQuery) {
+			q.Select(component.FieldID, component.FieldName)
+			q.WithAttributes()
+		}).
+		Order(incident.ByStartDate(entsql.OrderDesc()))
+
+	switch {
+	case param.Limit != nil && *param.Limit > 0:
+		query = query.Limit(*param.Limit)
+		if param.Page != nil && *param.Page > 1 {
+			query = query.Offset((*param.Page - 1) * *param.Limit)
+		}
+	case param.LastCount > 0:
+		query = query.Limit(param.LastCount)
+	}
+
+	rows, err := query.All(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	events := make([]*Incident, 0, len(rows))
+	for _, row := range rows {
+		events = append(events, incidentFromEnt(row))
+	}
+
+	grouped, err := db.statusesByIncident(ctx, incidentIDs(rows))
+	if err != nil {
+		return nil, 0, err
+	}
+	attachStatuses(events, grouped)
+
 	return events, total, nil
 }
 
@@ -285,26 +279,114 @@ func (db *DB) GetIncident(id int) (*Incident, error) {
 // WithTx runs fn inside a single transaction on the shared connection pool.
 // Callers use it to write a business change and enqueue its notification atomically.
 func (db *DB) WithTx(ctx context.Context, fn func(tx *Tx) error) error {
-	return db.g.WithContext(ctx).Transaction(func(gtx *gorm.DB) error {
-		return fn(&Tx{g: gtx})
-	})
+	tx, err := db.begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.rollback() }()
+
+	if err = fn(tx); err != nil {
+		return err
+	}
+	return tx.commit()
 }
 
 // SaveIncidentTx creates an incident using the provided transaction.
 func (db *DB) SaveIncidentTx(tx *Tx, inc *Incident) (uint, error) {
-	if err := tx.g.Create(inc).Error; err != nil {
+	ctx := context.Background()
+	c := db.clientFor(tx)
+
+	now := time.Now().UTC()
+	createdAt := now
+	if inc.CreatedAt != nil {
+		createdAt = *inc.CreatedAt
+	}
+	modifiedAt := now
+	if inc.ModifiedAt != nil {
+		modifiedAt = *inc.ModifiedAt
+	}
+
+	inc.CreatedAt = &createdAt
+	inc.ModifiedAt = &modifiedAt
+
+	create := c.Incident.Create().
+		SetText(valueOr(inc.Text, "")).
+		SetStartDate(valueOr(inc.StartDate, now)).
+		SetImpact(valueOr(inc.Impact, 0)).
+		SetSystem(inc.System).
+		SetType(incident.Type(inc.Type)).
+		SetCreatedAt(createdAt).
+		SetModifiedAt(modifiedAt)
+
+	if inc.Description != nil {
+		create.SetDescription(*inc.Description)
+	}
+	if inc.EndDate != nil {
+		create.SetEndDate(*inc.EndDate)
+	}
+	if inc.Status != "" {
+		create.SetStatus(string(inc.Status))
+	}
+	if inc.CreatedBy != nil {
+		create.SetCreatedBy(*inc.CreatedBy)
+	}
+	if inc.ContactEmail != nil {
+		create.SetContactEmail(*inc.ContactEmail)
+	}
+	if inc.Version != nil {
+		create.SetVersion(*inc.Version)
+	}
+
+	componentIDs := make([]int, 0, len(inc.Components))
+	for i := range inc.Components {
+		if inc.Components[i].ID != 0 {
+			componentIDs = append(componentIDs, int(inc.Components[i].ID))
+		}
+	}
+	if len(componentIDs) > 0 {
+		create.AddComponentIDs(componentIDs...)
+	}
+
+	created, err := create.Save(ctx)
+	if err != nil {
 		return 0, err
 	}
+
+	inc.ID = uint(created.ID)
+	inc.Version = intPtr(created.Version)
+
+	for i := range inc.Statuses {
+		if inc.Statuses[i].ID != 0 {
+			continue
+		}
+		id, errStatus := insertIncidentStatus(ctx, c, &inc.Statuses[i], inc.ID)
+		if errStatus != nil {
+			return 0, errStatus
+		}
+		inc.Statuses[i].ID = uint(id)
+		inc.Statuses[i].IncidentID = inc.ID
+	}
+
 	return inc.ID, nil
 }
 
 func (db *DB) SaveIncident(inc *Incident) (uint, error) {
-	return db.SaveIncidentTx(&Tx{g: db.g}, inc)
+	return db.SaveIncidentTx(nil, inc)
 }
 
 // ModifyIncidentTx applies a modification (with maintenance optimistic locking and
 // new status inserts) using the provided transaction.
 func (db *DB) ModifyIncidentTx(tx *Tx, inc *Incident) error {
+	return db.modifyIncident(context.Background(), db.clientFor(tx), inc)
+}
+
+func (db *DB) ModifyIncident(inc *Incident) error {
+	return db.execWithTx(context.Background(), nil, func(client *ent.Client, _ entsql.ExecQuerier) error {
+		return db.modifyIncident(context.Background(), client, inc)
+	})
+}
+
+func (db *DB) modifyIncident(ctx context.Context, c *ent.Client, inc *Incident) error {
 	if inc.Version == nil {
 		return errors.New("version is required for event modification")
 	}
@@ -313,19 +395,55 @@ func (db *DB) ModifyIncidentTx(tx *Tx, inc *Incident) error {
 	newVersion := expectedVersion + 1
 	inc.Version = &newVersion
 
-	query := tx.g.Model(&Incident{}).Where("id = ?", inc.ID)
+	now := time.Now().UTC()
 
+	// A struct-based update writes the non-zero fields only, so nil pointers and
+	// empty scalars are left untouched, mirroring the previous ORM behaviour.
+	update := c.Incident.Update().Where(incident.IDEQ(int(inc.ID)))
 	if inc.Type == event.TypeMaintenance {
-		query = query.Where("version = ?", expectedVersion)
+		update.Where(incident.VersionEQ(expectedVersion))
 	}
 
-	r := query.Omit("Statuses", "Components").Updates(inc)
-
-	if r.Error != nil {
-		return r.Error
+	if inc.Text != nil {
+		update.SetText(*inc.Text)
 	}
+	if inc.Description != nil {
+		update.SetDescription(*inc.Description)
+	}
+	if inc.StartDate != nil {
+		update.SetStartDate(*inc.StartDate)
+	}
+	if inc.EndDate != nil {
+		update.SetEndDate(*inc.EndDate)
+	}
+	if inc.Impact != nil {
+		update.SetImpact(*inc.Impact)
+	}
+	if inc.Status != "" {
+		update.SetStatus(string(inc.Status))
+	}
+	if inc.System {
+		update.SetSystem(true)
+	}
+	if inc.Type != "" {
+		update.SetType(incident.Type(inc.Type))
+	}
+	if inc.CreatedAt != nil {
+		update.SetCreatedAt(*inc.CreatedAt)
+	}
+	if inc.CreatedBy != nil {
+		update.SetCreatedBy(*inc.CreatedBy)
+	}
+	if inc.ContactEmail != nil {
+		update.SetContactEmail(*inc.ContactEmail)
+	}
+	update.SetVersion(newVersion).SetModifiedAt(now)
 
-	if inc.Type == event.TypeMaintenance && r.RowsAffected == 0 {
+	affected, err := update.Save(ctx)
+	if err != nil {
+		return err
+	}
+	if inc.Type == event.TypeMaintenance && affected == 0 {
 		return ErrVersionConflict
 	}
 
@@ -333,21 +451,15 @@ func (db *DB) ModifyIncidentTx(tx *Tx, inc *Incident) error {
 		if inc.Statuses[i].ID != 0 {
 			continue
 		}
-		if inc.Statuses[i].IncidentID == 0 {
-			inc.Statuses[i].IncidentID = inc.ID
+		id, errStatus := insertIncidentStatus(ctx, c, &inc.Statuses[i], inc.ID)
+		if errStatus != nil {
+			return errStatus
 		}
-		if err := tx.g.Create(&inc.Statuses[i]).Error; err != nil {
-			return err
-		}
+		inc.Statuses[i].ID = uint(id)
+		inc.Statuses[i].IncidentID = inc.ID
 	}
 
 	return nil
-}
-
-func (db *DB) ModifyIncident(inc *Incident) error {
-	return db.g.Transaction(func(gtx *gorm.DB) error {
-		return db.ModifyIncidentTx(&Tx{g: gtx}, inc)
-	})
 }
 
 // AddComponentToIncident adds a component and a status update to an incident using optimistic locking.
@@ -358,34 +470,30 @@ func (db *DB) AddComponentToIncident(inc *Incident, comp *Component, status Inci
 
 	expectedVersion := *inc.Version
 	newVersion := expectedVersion + 1
+	ctx := context.Background()
 
-	err := db.g.Transaction(func(tx *gorm.DB) error {
-		// Update version with optimistic lock
-		r := tx.Model(&Incident{}).
-			Where("id = ? AND version = ?", inc.ID, expectedVersion).
-			Updates(map[string]interface{}{
-				"version": newVersion,
-			})
-		if r.Error != nil {
-			return r.Error
+	err := db.execWithTx(ctx, nil, func(client *ent.Client, _ entsql.ExecQuerier) error {
+		affected, err := client.Incident.Update().
+			Where(incident.IDEQ(int(inc.ID)), incident.VersionEQ(expectedVersion)).
+			SetVersion(newVersion).
+			Save(ctx)
+		if err != nil {
+			return err
 		}
-		if r.RowsAffected == 0 {
+		if affected == 0 {
 			return ErrVersionConflict
 		}
 
-		// Add component to incident via association
-		if err := tx.Model(inc).Association("Components").Append(comp); err != nil {
-			return err
+		if comp.ID != 0 {
+			if _, err = client.Incident.UpdateOneID(int(inc.ID)).AddComponentIDs(int(comp.ID)).Save(ctx); err != nil {
+				return err
+			}
+			inc.Components = append(inc.Components, *comp)
 		}
 
-		// Create status update
-		if status.IncidentID == 0 {
-			status.IncidentID = inc.ID
-		}
-		if err := tx.Create(&status).Error; err != nil {
+		if _, err = insertIncidentStatus(ctx, client, &status, inc.ID); err != nil {
 			return err
 		}
-
 		return nil
 	})
 	if err != nil {
@@ -413,95 +521,108 @@ func (db *DB) ReOpenIncident(inc *Incident) error {
 // exceptions for "event.TypeMaintenance, event.MaintenancePendingReview, event.MaintenanceReviewed".
 // Supports optional filtering parameters: isActive, Types, LastCount.
 func (db *DB) GetEventsByComponentID(componentID uint, params ...*IncidentsParams) ([]*Incident, error) {
-	// Get all incidents for this component
-	var incidents []*Incident
 	var param IncidentsParams
 	if params != nil && params[0] != nil {
 		param = *params[0]
 	}
 
-	r := db.g.Model(&Incident{}).
-		Joins("JOIN incident_component_relation icr ON icr.incident_id = incident.id").
-		Where("icr.component_id = ?", componentID).
-		Where("NOT (incident.type = ? AND incident.status IN (?, ?))",
-			event.TypeMaintenance, event.MaintenancePendingReview, event.MaintenanceReviewed).
-		Where("NOT (incident.type = ? AND incident.status = ? AND "+
-			"NOT EXISTS (SELECT 1 FROM incident_status WHERE incident_status.incident_id = incident.id "+
-			"AND incident_status.status IN (?, ?, ?, ?)))",
-			event.TypeMaintenance, event.MaintenanceCancelled,
-			event.MaintenancePlanned, event.MaintenanceInProgress, event.MaintenanceModified, event.MaintenanceCompleted).
-		Preload("Statuses").
-		Preload("Components", func(db *gorm.DB) *gorm.DB {
-			return db.Select("ID, Name")
-		}).
-		Preload("Components.Attrs")
+	ctx := context.Background()
 
-	if param.LastCount != 0 {
-		r.Order("incident.id desc").Limit(param.LastCount)
+	preds := []predicate.Incident{
+		incident.HasComponentsWith(component.IDEQ(int(componentID))),
 	}
+	preds = append(preds, publicEventPredicates()...)
 
 	if param.IsActive != nil && *param.IsActive {
 		currentTime := time.Now().UTC()
-		r.Where("(incident.end_date IS NULL) OR "+
-			"(incident.start_date <= ? AND "+
-			"incident.end_date >= ? AND "+
-			"incident.status NOT IN (?))",
-			currentTime,
-			currentTime,
-			[]event.Status{event.IncidentResolved,
-				event.MaintenanceCompleted,
-				event.MaintenanceCancelled,
-				event.InfoCompleted,
-				event.InfoCancelled})
+		preds = append(preds, incident.Or(
+			incident.EndDateIsNil(),
+			incident.And(
+				incident.StartDateLTE(currentTime),
+				incident.EndDateGTE(currentTime),
+				incident.StatusNotIn(
+					string(event.IncidentResolved),
+					string(event.MaintenanceCompleted),
+					string(event.MaintenanceCancelled),
+					string(event.InfoCompleted),
+					string(event.InfoCancelled),
+				),
+			),
+		))
 	}
 
 	if len(param.Types) > 0 {
-		r.Where("incident.type IN (?)", param.Types)
+		types := make([]incident.Type, 0, len(param.Types))
+		for _, t := range param.Types {
+			types = append(types, incident.Type(t))
+		}
+		preds = append(preds, incident.TypeIn(types...))
 	}
 
-	r.Find(&incidents)
-	if r.Error != nil {
-		return nil, r.Error
+	query := db.e.Incident.Query().
+		Where(preds...).
+		WithComponents(func(q *ent.ComponentQuery) {
+			q.Select(component.FieldID, component.FieldName)
+			q.WithAttributes()
+		})
+
+	if param.LastCount != 0 {
+		query = query.Order(incident.ByID(entsql.OrderDesc())).Limit(param.LastCount)
+	} else {
+		query = query.Order(incident.ByID(entsql.OrderAsc()))
 	}
+
+	rows, err := query.All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	incidents := make([]*Incident, 0, len(rows))
+	for _, row := range rows {
+		incidents = append(incidents, incidentFromEnt(row))
+	}
+
+	grouped, err := db.statusesByIncident(ctx, incidentIDs(rows))
+	if err != nil {
+		return nil, err
+	}
+	attachStatuses(incidents, grouped)
+
 	return incidents, nil
 }
 
 func (db *DB) GetIncidentsByComponentAttr(attr *ComponentAttr, params ...*IncidentsParams) ([]*Incident, error) {
 	// Get all public incidents for components with this attribute.
 	// Maintenance events in pending_review/reviewed status are excluded (require authentication).
-	var incidents []*Incident
 	var param IncidentsParams
 	if params != nil && params[0] != nil {
 		param = *params[0]
 	}
 
-	r := db.g.Model(&Incident{}).
-		Joins("JOIN incident_component_relation icr ON icr.incident_id = incident.id").
-		Joins("JOIN component_attribute ca ON ca.component_id = icr.component_id").
-		Where("ca.name = ? AND ca.value = ?", attr.Name, attr.Value).
-		Where("NOT (incident.type = ? AND incident.status IN (?, ?))",
-			event.TypeMaintenance, event.MaintenancePendingReview, event.MaintenanceReviewed).
-		Where("NOT (incident.type = ? AND incident.status = ? AND "+
-			"NOT EXISTS (SELECT 1 FROM incident_status WHERE incident_status.incident_id = incident.id "+
-			"AND incident_status.status IN (?, ?, ?, ?)))",
-			event.TypeMaintenance, event.MaintenanceCancelled,
-			event.MaintenancePlanned, event.MaintenanceInProgress, event.MaintenanceModified, event.MaintenanceCompleted).
-		Preload("Statuses").
-		Preload("Components", func(db *gorm.DB) *gorm.DB {
-			return db.Select("ID, Name")
-		}).
-		Preload("Components.Attrs")
+	ctx := context.Background()
 
+	// The previous ORM joined the relation and the attribute tables directly, so an
+	// incident matched by several components appeared once per match. The raw id
+	// query keeps that shape and its ordering.
+	query := incidentsByComponentAttrQuery
+	args := []any{
+		attr.Name, attr.Value,
+		string(event.TypeMaintenance), string(event.MaintenancePendingReview), string(event.MaintenanceReviewed),
+		string(event.TypeMaintenance), string(event.MaintenanceCancelled),
+		string(event.MaintenancePlanned), string(event.MaintenanceInProgress),
+		string(event.MaintenanceModified), string(event.MaintenanceCompleted),
+	}
 	if param.LastCount != 0 {
-		r.Order("incident.id desc").Limit(param.LastCount)
+		query += " ORDER BY incident.id DESC LIMIT $12"
+		args = append(args, param.LastCount)
 	}
 
-	r.Find(&incidents)
-	if r.Error != nil {
-		return nil, r.Error
+	ids, err := scanIntColumn(ctx, db.rawFor(nil), query, args...)
+	if err != nil {
+		return nil, err
 	}
 
-	return incidents, nil
+	return db.incidentsByIDs(ctx, ids)
 }
 
 func (db *DB) GetOpenedIncidentsWithComponent(_ string, _ []ComponentAttr) (*Incident, error) {
@@ -752,23 +873,19 @@ func (db *DB) MoveComponentFromOldToAnotherIncident(
 		incOld.EndDate = &timeNow
 	}
 
-	err := db.g.Transaction(func(tx *gorm.DB) error {
-		if !closeOld {
-			if err := tx.Model(incOld).Association("Components").Delete(comp); err != nil {
-				return err
+	err := db.execWithTx(context.Background(), nil, func(client *ent.Client, _ entsql.ExecQuerier) error {
+		if !closeOld && comp.ID != 0 {
+			if errRemove := removeIncidentComponent(context.Background(), client, incOld.ID, comp.ID); errRemove != nil {
+				return errRemove
 			}
+			dropIncidentComponent(incOld, comp.ID)
 		}
 
-		if r := tx.Save(incNew); r.Error != nil {
-			return r.Error
+		if errSave := saveIncidentFull(context.Background(), client, incNew); errSave != nil {
+			return errSave
 		}
-		if r := tx.Save(incOld); r.Error != nil {
-			return r.Error
-		}
-
-		return nil
+		return saveIncidentFull(context.Background(), client, incOld)
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -824,25 +941,23 @@ func (db *DB) ExtractComponentsToNewIncident(
 	}
 
 	// Use a transaction to save both incidents with their statuses and update associations
-	err = db.g.Transaction(func(tx *gorm.DB) error {
+	err = db.execWithTx(context.Background(), nil, func(client *ent.Client, _ entsql.ExecQuerier) error {
 		// Remove component from old incident
-		for _, c := range comp {
-			if errDel := tx.Model(incOld).Association("Components").Delete(c); err != nil {
-				return errDel
+		for i := range comp {
+			if comp[i].ID == 0 {
+				continue
 			}
+			if errRemove := removeIncidentComponent(context.Background(), client, incOld.ID, comp[i].ID); errRemove != nil {
+				return errRemove
+			}
+			dropIncidentComponent(incOld, comp[i].ID)
 		}
 
-		// Save both incidents with their new statuses (Save() saves associated records)
-		if r := tx.Save(inc); r.Error != nil {
-			return r.Error
+		if errSave := saveIncidentFull(context.Background(), client, inc); errSave != nil {
+			return errSave
 		}
-		if r := tx.Save(incOld); r.Error != nil {
-			return r.Error
-		}
-
-		return nil
+		return saveIncidentFull(context.Background(), client, incOld)
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -976,27 +1091,35 @@ func (db *DB) GetEventUpdates(incidentID uint) ([]IncidentStatus, error) {
 // ModifyEventUpdateTx patches an event status update's text using the provided
 // transaction and returns the updated row.
 func (db *DB) ModifyEventUpdateTx(tx *Tx, update IncidentStatus) (IncidentStatus, error) {
+	ctx := context.Background()
+	c := db.clientFor(tx)
 	now := time.Now().UTC()
-	var updated IncidentStatus
-	r := tx.g.Model(&IncidentStatus{}).
-		Clauses(clause.Returning{}).
-		Where("id = ? AND incident_id = ?", update.ID, update.IncidentID).
-		Updates(map[string]interface{}{
-			"text":        update.Text,
-			"modified_at": now,
-		}).
-		Scan(&updated)
 
-	if r.Error != nil {
-		return IncidentStatus{}, r.Error
+	affected, err := c.IncidentStatus.Update().
+		Where(
+			incidentstatus.IDEQ(int(update.ID)),
+			incidentstatus.IncidentIDEQ(int(update.IncidentID)),
+		).
+		SetText(update.Text).
+		SetModifiedAt(now).
+		Save(ctx)
+	if err != nil {
+		return IncidentStatus{}, err
 	}
-	if r.RowsAffected == 0 {
+	if affected == 0 {
 		return IncidentStatus{}, ErrDBEventUpdateDSNotExist
 	}
 
-	return updated, nil
+	row, err := c.IncidentStatus.Query().
+		Where(incidentstatus.IDEQ(int(update.ID))).
+		Only(ctx)
+	if err != nil {
+		return IncidentStatus{}, err
+	}
+
+	return incidentStatusFromEnt(row), nil
 }
 
 func (db *DB) ModifyEventUpdate(update IncidentStatus) (IncidentStatus, error) {
-	return db.ModifyEventUpdateTx(&Tx{g: db.g}, update)
+	return db.ModifyEventUpdateTx(nil, update)
 }

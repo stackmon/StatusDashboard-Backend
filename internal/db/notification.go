@@ -2,11 +2,15 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
+	entsql "entgo.io/ent/dialect/sql"
+
+	"github.com/stackmon/otc-status-dashboard/ent"
+	"github.com/stackmon/otc-status-dashboard/ent/notificationoutbox"
 )
 
 const (
@@ -25,21 +29,15 @@ var (
 	ErrNotificationNotFound  = errors.New("notification: not found")
 )
 
-// rowExists checks whether a row with the same dedup key already exists.
-func (db *DB) rowExists(tx *gorm.DB, dedupKey string) (bool, error) {
-	q := db.g
-	if tx != nil {
-		q = tx
-	}
+// outboxColumns lists every outbox column in the order selectOutboxRows expects.
+const outboxColumns = `id, kind, incident_id, recipient, payload, change_id, dedup_key, status, ` +
+	`attempts, next_attempt_at, locked_by, locked_at, last_error, created_at, updated_at`
 
-	var row NotificationOutbox
-	if err := q.Select("id").Where("dedup_key = ?", dedupKey).First(&row).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
+// rowExists checks whether a row with the same dedup key already exists.
+func (db *DB) rowExists(ctx context.Context, c *ent.Client, dedupKey string) (bool, error) {
+	return c.NotificationOutbox.Query().
+		Where(notificationoutbox.DedupKeyEQ(dedupKey)).
+		Exist(ctx)
 }
 
 // Enqueue inserts one outbox row for a single recipient.
@@ -49,15 +47,49 @@ func (db *DB) Enqueue(ctx context.Context, tx *Tx, row NotificationOutbox) error
 		return errors.New("notification: dedup_key is required")
 	}
 
-	return db.execWithTx(ctx, tx, func(gtx *gorm.DB) error {
-		exists, err := db.rowExists(gtx, row.DedupKey)
+	return db.execWithTx(ctx, tx, func(c *ent.Client, _ entsql.ExecQuerier) error {
+		exists, err := db.rowExists(ctx, c, row.DedupKey)
 		if err != nil {
 			return err
 		}
 		if exists {
 			return ErrNotificationDuplicate
 		}
-		return gtx.Create(&row).Error
+
+		create := c.NotificationOutbox.Create().
+			SetKind(row.Kind).
+			SetIncidentID(int(row.IncidentID)).
+			SetRecipient(row.Recipient).
+			SetPayload(row.Payload).
+			SetChangeID(row.ChangeID).
+			SetDedupKey(row.DedupKey)
+		if row.Status != "" {
+			create.SetStatus(row.Status)
+		}
+		if row.Attempts != 0 {
+			create.SetAttempts(row.Attempts)
+		}
+		if row.NextAttemptAt != nil {
+			create.SetNextAttemptAt(*row.NextAttemptAt)
+		}
+		if row.LockedBy != nil {
+			create.SetLockedBy(*row.LockedBy)
+		}
+		if row.LockedAt != nil {
+			create.SetLockedAt(*row.LockedAt)
+		}
+		if row.LastError != nil {
+			create.SetLastError(*row.LastError)
+		}
+		if !row.CreatedAt.IsZero() {
+			create.SetCreatedAt(row.CreatedAt)
+		}
+		if !row.UpdatedAt.IsZero() {
+			create.SetUpdatedAt(row.UpdatedAt)
+		}
+
+		_, err = create.Save(ctx)
+		return err
 	})
 }
 
@@ -69,48 +101,54 @@ func (db *DB) ClaimPending(
 ) ([]NotificationOutbox, error) {
 	var rows []NotificationOutbox
 
-	return rows, db.execWithTx(ctx, tx, func(gtx *gorm.DB) error {
-		if err := gtx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Where("status = ?", NotificationStatusPending).
-			Where("next_attempt_at IS NULL OR next_attempt_at <= ?", time.Now().UTC()).
-			Order("id ASC").
-			Limit(limit).
-			Find(&rows).Error; err != nil {
+	err := db.execWithTx(ctx, tx, func(_ *ent.Client, raw entsql.ExecQuerier) error {
+		claimed, err := selectOutboxRows(ctx, raw,
+			`SELECT `+outboxColumns+` FROM notification_outbox
+			 WHERE status = $1 AND (next_attempt_at IS NULL OR next_attempt_at <= $2)
+			 ORDER BY id ASC LIMIT $3 FOR UPDATE SKIP LOCKED`,
+			NotificationStatusPending, time.Now().UTC(), limit)
+		if err != nil {
 			return err
 		}
+
 		now := time.Now().UTC()
-		for i := range rows {
-			rows[i].Status = NotificationStatusProcessing
-			rows[i].Attempts++
-			rows[i].LockedBy = &leaseOwner
-			rows[i].LockedAt = &now
-			if err := gtx.Model(&rows[i]).Updates(map[string]any{
-				"status":    rows[i].Status,
-				"attempts":  rows[i].Attempts,
-				"locked_by": rows[i].LockedBy,
-				"locked_at": rows[i].LockedAt,
-			}).Error; err != nil {
+		for i := range claimed {
+			claimed[i].Status = NotificationStatusProcessing
+			claimed[i].Attempts++
+			claimed[i].LockedBy = &leaseOwner
+			claimed[i].LockedAt = &now
+
+			if _, err = raw.ExecContext(ctx,
+				`UPDATE notification_outbox
+				 SET status = $1, attempts = $2, locked_by = $3, locked_at = $4, updated_at = $5
+				 WHERE id = $6`,
+				claimed[i].Status, claimed[i].Attempts, claimed[i].LockedBy, claimed[i].LockedAt,
+				now, claimed[i].ID); err != nil {
 				return err
 			}
 		}
+
+		rows = claimed
 		return nil
 	})
+	return rows, err
 }
 
 // MarkSent marks a row as sent and clears the active lease.
 func (db *DB) MarkSent(ctx context.Context, tx *Tx, id uint) error {
-	return db.execWithTx(ctx, tx, func(gtx *gorm.DB) error {
-		res := gtx.Model(&NotificationOutbox{}).
-			Where("id = ?", id).Updates(map[string]any{
-			"status":     NotificationStatusSent,
-			"locked_by":  nil,
-			"locked_at":  nil,
-			"last_error": nil,
-		})
-		if res.Error != nil {
-			return res.Error
+	return db.execWithTx(ctx, tx, func(c *ent.Client, _ entsql.ExecQuerier) error {
+		affected, err := c.NotificationOutbox.Update().
+			Where(notificationoutbox.IDEQ(int(id))).
+			SetStatus(NotificationStatusSent).
+			ClearLockedBy().
+			ClearLockedAt().
+			ClearLastError().
+			SetUpdatedAt(time.Now().UTC()).
+			Save(ctx)
+		if err != nil {
+			return err
 		}
-		if res.RowsAffected == 0 {
+		if affected == 0 {
 			return ErrNotificationNotFound
 		}
 		return nil
@@ -118,20 +156,19 @@ func (db *DB) MarkSent(ctx context.Context, tx *Tx, id uint) error {
 }
 
 // getRowByID loads a single notification row by primary key.
-func (db *DB) getRowByID(tx *gorm.DB, id uint) (*NotificationOutbox, error) {
-	q := db.g
-	if tx != nil {
-		q = tx
-	}
-
-	var row NotificationOutbox
-	if err := q.First(&row, id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+func (db *DB) getRowByID(ctx context.Context, c *ent.Client, id uint) (*NotificationOutbox, error) {
+	row, err := c.NotificationOutbox.Query().
+		Where(notificationoutbox.IDEQ(int(id))).
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
 			return nil, ErrNotificationNotFound
 		}
 		return nil, err
 	}
-	return &row, nil
+
+	domain := notificationOutboxFromEnt(row)
+	return &domain, nil
 }
 
 // MarkFailed marks a row as failed or pending with retry metadata.
@@ -140,46 +177,47 @@ func (db *DB) getRowByID(tx *gorm.DB, id uint) (*NotificationOutbox, error) {
 func (db *DB) MarkFailed(
 	ctx context.Context, tx *Tx, id uint, errText string, maxAttempts int, backoff func(attempts int) time.Time,
 ) error {
-	return db.execWithTx(ctx, tx, func(gtx *gorm.DB) error {
-		row, err := db.getRowByID(gtx, id)
+	return db.execWithTx(ctx, tx, func(c *ent.Client, _ entsql.ExecQuerier) error {
+		row, err := db.getRowByID(ctx, c, id)
 		if err != nil {
 			return err
 		}
 
-		updates := map[string]any{
-			"last_error": errText,
-			"locked_by":  nil,
-			"locked_at":  nil,
-		}
+		update := c.NotificationOutbox.Update().
+			Where(notificationoutbox.IDEQ(int(id))).
+			SetLastError(errText).
+			ClearLockedBy().
+			ClearLockedAt().
+			SetUpdatedAt(time.Now().UTC())
 
 		if row.Attempts >= maxAttempts {
-			updates["status"] = NotificationStatusFailed
-			updates["next_attempt_at"] = nil
+			update.SetStatus(NotificationStatusFailed).ClearNextAttemptAt()
 		} else {
-			updates["status"] = NotificationStatusPending
-			updates["next_attempt_at"] = backoff(row.Attempts)
+			update.SetStatus(NotificationStatusPending).SetNextAttemptAt(backoff(row.Attempts))
 		}
 
-		return gtx.Model(&NotificationOutbox{}).Where("id = ?", id).Updates(updates).Error
+		_, err = update.Save(ctx)
+		return err
 	})
 }
 
 // MarkFailedTerminal fails a row outright, ignoring the remaining attempts. Used for
 // rejections the server will repeat on every retry, such as an unknown recipient.
 func (db *DB) MarkFailedTerminal(ctx context.Context, tx *Tx, id uint, errText string) error {
-	return db.execWithTx(ctx, tx, func(gtx *gorm.DB) error {
-		res := gtx.Model(&NotificationOutbox{}).
-			Where("id = ?", id).Updates(map[string]any{
-			"status":          NotificationStatusFailed,
-			"last_error":      errText,
-			"next_attempt_at": nil,
-			"locked_by":       nil,
-			"locked_at":       nil,
-		})
-		if res.Error != nil {
-			return res.Error
+	return db.execWithTx(ctx, tx, func(c *ent.Client, _ entsql.ExecQuerier) error {
+		affected, err := c.NotificationOutbox.Update().
+			Where(notificationoutbox.IDEQ(int(id))).
+			SetStatus(NotificationStatusFailed).
+			SetLastError(errText).
+			ClearNextAttemptAt().
+			ClearLockedBy().
+			ClearLockedAt().
+			SetUpdatedAt(time.Now().UTC()).
+			Save(ctx)
+		if err != nil {
+			return err
 		}
-		if res.RowsAffected == 0 {
+		if affected == 0 {
 			return ErrNotificationNotFound
 		}
 		return nil
@@ -193,49 +231,96 @@ func (db *DB) RecoverStaleProcessing(
 ) ([]NotificationOutbox, error) {
 	var rows []NotificationOutbox
 
-	return rows, db.execWithTx(ctx, tx, func(gtx *gorm.DB) error {
+	err := db.execWithTx(ctx, tx, func(_ *ent.Client, raw entsql.ExecQuerier) error {
 		cutoff := time.Now().UTC().Add(-leaseTimeout)
 		now := time.Now().UTC()
-		if err := gtx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Where("status = ?", NotificationStatusProcessing).
-			Where("locked_at < ?", cutoff).
-			Find(&rows).Error; err != nil {
+
+		stale, err := selectOutboxRows(ctx, raw,
+			`SELECT `+outboxColumns+` FROM notification_outbox
+			 WHERE status = $1 AND locked_at < $2
+			 FOR UPDATE SKIP LOCKED`,
+			NotificationStatusProcessing, cutoff)
+		if err != nil {
 			return err
 		}
-		for i := range rows {
-			if rows[i].Attempts >= maxAttempts {
-				rows[i].Status = NotificationStatusFailed
-				rows[i].NextAttemptAt = nil
-			} else {
-				rows[i].Status = NotificationStatusPending
-				rows[i].NextAttemptAt = &now
-			}
-			rows[i].LockedBy = nil
-			rows[i].LockedAt = nil
 
-			if err := gtx.Model(&rows[i]).
-				Where("status = ?", NotificationStatusProcessing).
-				Where("locked_at < ?", cutoff).
-				Updates(map[string]any{
-					"status":          rows[i].Status,
-					"next_attempt_at": rows[i].NextAttemptAt,
-					"locked_by":       rows[i].LockedBy,
-					"locked_at":       rows[i].LockedAt,
-				}).Error; err != nil {
+		for i := range stale {
+			if stale[i].Attempts >= maxAttempts {
+				stale[i].Status = NotificationStatusFailed
+				stale[i].NextAttemptAt = nil
+			} else {
+				stale[i].Status = NotificationStatusPending
+				stale[i].NextAttemptAt = &now
+			}
+			stale[i].LockedBy = nil
+			stale[i].LockedAt = nil
+
+			if _, err = raw.ExecContext(ctx,
+				`UPDATE notification_outbox
+				 SET status = $1, next_attempt_at = $2, locked_by = $3, locked_at = $4, updated_at = $5
+				 WHERE id = $6 AND status = $7 AND locked_at < $8`,
+				stale[i].Status, stale[i].NextAttemptAt, stale[i].LockedBy, stale[i].LockedAt,
+				now, stale[i].ID, NotificationStatusProcessing, cutoff); err != nil {
 				return err
 			}
 		}
+
+		rows = stale
 		return nil
 	})
+	return rows, err
 }
 
-// execWithTx runs the callback in a transaction if tx is nil; otherwise it uses the provided tx.
-func (db *DB) execWithTx(ctx context.Context, tx *Tx, fn func(*gorm.DB) error) error {
-	if tx != nil {
-		return fn(tx.g)
+// selectOutboxRows runs a hand-written statement and scans full outbox rows. The
+// claim and recovery paths need row locks, which the Ent query builder cannot
+// express, so the statements stay raw.
+func selectOutboxRows(
+	ctx context.Context, q entsql.ExecQuerier, query string, args ...any,
+) ([]NotificationOutbox, error) {
+	sqlRows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer sqlRows.Close()
+
+	var out []NotificationOutbox
+	for sqlRows.Next() {
+		var (
+			row         NotificationOutbox
+			payload     []byte
+			nextAttempt sql.NullTime
+			lockedBy    sql.NullString
+			lockedAt    sql.NullTime
+			lastError   sql.NullString
+		)
+		if err = sqlRows.Scan(
+			&row.ID, &row.Kind, &row.IncidentID, &row.Recipient, &payload, &row.ChangeID,
+			&row.DedupKey, &row.Status, &row.Attempts, &nextAttempt, &lockedBy, &lockedAt,
+			&lastError, &row.CreatedAt, &row.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+
+		if payload != nil {
+			if err = json.Unmarshal(payload, &row.Payload); err != nil {
+				return nil, err
+			}
+		}
+		if nextAttempt.Valid {
+			row.NextAttemptAt = &nextAttempt.Time
+		}
+		if lockedBy.Valid {
+			row.LockedBy = &lockedBy.String
+		}
+		if lockedAt.Valid {
+			row.LockedAt = &lockedAt.Time
+		}
+		if lastError.Valid {
+			row.LastError = &lastError.String
+		}
+
+		out = append(out, row)
 	}
 
-	return db.g.WithContext(ctx).Transaction(func(gtx *gorm.DB) error {
-		return fn(gtx)
-	})
+	return out, sqlRows.Err()
 }

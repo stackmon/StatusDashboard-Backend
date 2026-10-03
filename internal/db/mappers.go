@@ -143,6 +143,35 @@ func attachStatuses(incidents []*Incident, grouped map[int][]IncidentStatus) {
 	}
 }
 
+func notificationOutboxFromEnt(e *ent.NotificationOutbox) NotificationOutbox {
+	row := NotificationOutbox{
+		ID:         uint(e.ID),
+		Kind:       e.Kind,
+		IncidentID: uint(e.IncidentID),
+		Recipient:  e.Recipient,
+		Payload:    e.Payload,
+		ChangeID:   e.ChangeID,
+		DedupKey:   e.DedupKey,
+		Status:     e.Status,
+		Attempts:   e.Attempts,
+		CreatedAt:  e.CreatedAt,
+		UpdatedAt:  e.UpdatedAt,
+	}
+	if !e.NextAttemptAt.IsZero() {
+		row.NextAttemptAt = &e.NextAttemptAt
+	}
+	if e.LockedBy != "" {
+		row.LockedBy = &e.LockedBy
+	}
+	if !e.LockedAt.IsZero() {
+		row.LockedAt = &e.LockedAt
+	}
+	if e.LastError != "" {
+		row.LastError = &e.LastError
+	}
+	return row
+}
+
 func incidentIDs(rows []*ent.Incident) []int {
 	ids := make([]int, 0, len(rows))
 	for _, r := range rows {
