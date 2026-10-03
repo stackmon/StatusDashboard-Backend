@@ -51,6 +51,7 @@ func initRBACTests(t *testing.T) *gin.Engine {
 
 	d, err := db.New(&conf.Config{DB: databaseURL})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
 
 	gin.SetMode(gin.TestMode)
 	r := gin.Default()

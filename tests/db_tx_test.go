@@ -28,9 +28,8 @@ func TestWithTx_CommitsIncidentAndOutboxAtomically(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var incCount, outCount int64
-	require.NoError(t, g.Model(&db.Incident{}).Where("id = ?", incID).Count(&incCount).Error)
-	require.NoError(t, g.Model(&db.NotificationOutbox{}).Where("incident_id = ?", incID).Count(&outCount).Error)
+	incCount := tableCount(t, g, "incident", "id = $1", incID)
+	outCount := tableCount(t, g, "notification_outbox", "incident_id = $1", incID)
 	assert.Equal(t, int64(1), incCount)
 	assert.Equal(t, int64(1), outCount)
 }
@@ -57,9 +56,8 @@ func TestWithTx_RollsBackBothOnError(t *testing.T) {
 	})
 	require.ErrorIs(t, err, sentinel)
 
-	var incCount, outCount int64
-	require.NoError(t, g.Model(&db.Incident{}).Where("id = ?", incID).Count(&incCount).Error)
-	require.NoError(t, g.Model(&db.NotificationOutbox{}).Where("dedup_key = ?", dedup).Count(&outCount).Error)
+	incCount := tableCount(t, g, "incident", "id = $1", incID)
+	outCount := tableCount(t, g, "notification_outbox", "dedup_key = $1", dedup)
 	assert.Equal(t, int64(0), incCount, "incident rolled back")
 	assert.Equal(t, int64(0), outCount, "no orphan email task")
 }
@@ -86,8 +84,7 @@ func TestModifyIncidentTx_SharedTxWithEnqueue(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, event.MaintenanceReviewed, got.Status)
 
-	var outCount int64
-	require.NoError(t, g.Model(&db.NotificationOutbox{}).Where("dedup_key = ?", row.DedupKey).Count(&outCount).Error)
+	outCount := tableCount(t, g, "notification_outbox", "dedup_key = $1", row.DedupKey)
 	assert.Equal(t, int64(1), outCount)
 }
 
@@ -96,13 +93,12 @@ func TestModifyEventUpdateTx_UpdatesText(t *testing.T) {
 
 	incID := seedIncident(t, d)
 	// Seed one status row for the incident.
-	status := db.IncidentStatus{IncidentID: incID, Status: event.MaintenancePendingReview, Text: "original"}
-	require.NoError(t, g.Create(&status).Error)
+	statusID := insertIncidentStatus(t, g, incID, string(event.MaintenancePendingReview), "original")
 
 	var updated db.IncidentStatus
 	err := d.WithTx(context.Background(), func(tx *db.Tx) error {
 		u, e := d.ModifyEventUpdateTx(tx, db.IncidentStatus{
-			ID: status.ID, IncidentID: incID, Text: "patched",
+			ID: statusID, IncidentID: incID, Text: "patched",
 		})
 		if e != nil {
 			return e

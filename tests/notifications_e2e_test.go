@@ -6,22 +6,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 
 	"github.com/stackmon/otc-status-dashboard/internal/db"
 	"github.com/stackmon/otc-status-dashboard/internal/event"
 )
-
-func outboxRecipientsByKind(t *testing.T, g *gorm.DB, incidentID int, kind string) []string {
-	t.Helper()
-	var rows []db.NotificationOutbox
-	require.NoError(t, g.Where("incident_id = ? AND kind = ?", incidentID, kind).Find(&rows).Error)
-	out := make([]string, 0, len(rows))
-	for i := range rows {
-		out = append(out, rows[i].Recipient)
-	}
-	return out
-}
 
 // TestE2E_CreateMaintenanceDeliversToAllRecipients ties the whole pipeline together:
 // API create -> outbox rows -> worker drain -> sender delivers each recipient.
@@ -42,11 +30,7 @@ func TestE2E_CreateMaintenanceDeliversToAllRecipients(t *testing.T) {
 		[]string{"smod@com.com", "ops@com.com", "admin@com.com", "test@example.com"},
 		fake.recipients())
 
-	var notSent int64
-	require.NoError(t, g.Model(&db.NotificationOutbox{}).
-		Where("incident_id = ? AND status <> ?", eventID, db.NotificationStatusSent).
-		Count(&notSent).Error)
-	assert.Equal(t, int64(0), notSent, "every recipient delivered")
+	assert.Equal(t, int64(0), outboxNotSentCount(t, g, eventID), "every recipient delivered")
 }
 
 // TestE2E_ReviewedTransitionNotifiesReviewAudience covers the `reviewed` kind row set.
@@ -73,8 +57,7 @@ func TestE2E_LifecycleTransitionNotifiesCreatorOnly(t *testing.T) {
 	eventID := resp.Result[0].IncidentID
 	transitionTo(t, r, eventID, event.MaintenanceCancelled, adminToken) // planned -> cancelled
 
-	var rows []db.NotificationOutbox
-	require.NoError(t, g.Where("incident_id = ?", eventID).Find(&rows).Error)
+	rows := queryOutbox(t, g, "incident_id = $1", eventID)
 	require.NotEmpty(t, rows)
 	for i := range rows {
 		assert.Equal(t, db.NotificationKindStatusChanged, rows[i].Kind)

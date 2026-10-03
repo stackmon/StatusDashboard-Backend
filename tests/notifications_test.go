@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -9,30 +10,21 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	gormpostgres "gorm.io/driver/postgres"
-	"gorm.io/gorm"
 
 	"github.com/stackmon/otc-status-dashboard/internal/conf"
 	"github.com/stackmon/otc-status-dashboard/internal/db"
 )
 
-// newNotifDB returns the DB under test plus a raw gorm handle for seeding and
-// verification against the real Postgres container.
-func newNotifDB(t *testing.T) (*db.DB, *gorm.DB) {
+// newNotifDB returns the DB under test plus a raw handle for seeding and
+// verification against the real Postgres database.
+func newNotifDB(t *testing.T) (*db.DB, *sql.DB) {
 	t.Helper()
 
 	d, err := db.New(&conf.Config{DB: databaseURL})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = d.Close() })
 
-	g, err := gorm.Open(gormpostgres.New(gormpostgres.Config{DSN: databaseURL}), &gorm.Config{})
-	require.NoError(t, err)
-	sqlDB, err := g.DB()
-	require.NoError(t, err)
-	sqlDB.SetMaxOpenConns(2)
-	t.Cleanup(func() { _ = sqlDB.Close() })
-
-	return d, g
+	return d, openRawDB(t)
 }
 
 // seedIncident inserts a minimal maintenance incident to satisfy the outbox FK
@@ -68,13 +60,6 @@ func newOutboxRow(incidentID uint, recipient string) db.NotificationOutbox {
 	}
 }
 
-func fetchRow(t *testing.T, g *gorm.DB, id uint) db.NotificationOutbox {
-	t.Helper()
-	var row db.NotificationOutbox
-	require.NoError(t, g.First(&row, id).Error)
-	return row
-}
-
 func TestEnqueue_Success(t *testing.T) {
 	ctx := context.Background()
 	d, g := newNotifDB(t)
@@ -83,8 +68,7 @@ func TestEnqueue_Success(t *testing.T) {
 	row := newOutboxRow(incID, "creator@com.com")
 	require.NoError(t, d.Enqueue(ctx, nil, row))
 
-	var stored db.NotificationOutbox
-	require.NoError(t, g.Where("dedup_key = ?", row.DedupKey).First(&stored).Error)
+	stored := fetchByDedup(t, g, row.DedupKey)
 	assert.Equal(t, db.NotificationStatusPending, stored.Status)
 	assert.Equal(t, incID, stored.IncidentID)
 	assert.Equal(t, 0, stored.Attempts)
@@ -251,8 +235,7 @@ func TestRecoverStaleProcessing_ReturnsToPending(t *testing.T) {
 
 	// Simulate a crashed pod: push locked_at far into the past.
 	stale := time.Now().UTC().Add(-10 * time.Minute)
-	require.NoError(t, g.Model(&db.NotificationOutbox{}).Where("id = ?", id).
-		Update("locked_at", stale).Error)
+	updateOutbox(t, g, map[string]any{"locked_at": stale}, "id", id)
 
 	recovered, err := d.RecoverStaleProcessing(ctx, nil, time.Minute, 5)
 	require.NoError(t, err)
@@ -277,8 +260,7 @@ func TestRecoverStaleProcessing_FinalWhenAttemptsExhausted(t *testing.T) {
 	id := findClaimedID(t, claimed, row.DedupKey) // attempts is now 1
 
 	stale := time.Now().UTC().Add(-10 * time.Minute)
-	require.NoError(t, g.Model(&db.NotificationOutbox{}).Where("id = ?", id).
-		Update("locked_at", stale).Error)
+	updateOutbox(t, g, map[string]any{"locked_at": stale}, "id", id)
 
 	// maxAttempts=1 with attempts=1 -> recovery marks it failed.
 	recovered, err := d.RecoverStaleProcessing(ctx, nil, time.Minute, 1)

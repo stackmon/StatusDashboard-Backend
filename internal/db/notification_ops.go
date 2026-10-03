@@ -56,11 +56,20 @@ FROM notification_outbox`
 // Rows stuck in pending with a rising attempt count are the usual symptom of a
 // misconfigured relay, so every status must be reachable, not just failed.
 func (db *DB) ListNotificationsByStatus(ctx context.Context, status string, limit int) ([]NotificationOutbox, error) {
-	rows, err := db.e.NotificationOutbox.Query().
+	// Ent drops Limit(0) while SQL LIMIT 0 selects nothing; keep the SQL semantics
+	// so a zero limit returns no rows and a negative one means "no limit".
+	if limit == 0 {
+		return []NotificationOutbox{}, nil
+	}
+
+	query := db.e.NotificationOutbox.Query().
 		Where(notificationoutbox.StatusEQ(status)).
-		Order(notificationoutbox.ByUpdatedAt(entsql.OrderDesc())).
-		Limit(limit).
-		All(ctx)
+		Order(notificationoutbox.ByUpdatedAt(entsql.OrderDesc()))
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+
+	rows, err := query.All(ctx)
 	if err != nil {
 		return nil, err
 	}

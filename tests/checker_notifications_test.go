@@ -6,8 +6,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
-	gormpostgres "gorm.io/driver/postgres"
-	"gorm.io/gorm"
 
 	"github.com/stackmon/otc-status-dashboard/internal/checker"
 	"github.com/stackmon/otc-status-dashboard/internal/conf"
@@ -37,12 +35,7 @@ func TestChecker_ReviewedToPlanned_EnqueuesStatusChangedToCreator(t *testing.T) 
 	eventID := resp.Result[0].IncidentID
 	transitionTo(t, r, eventID, event.MaintenanceReviewed, adminToken) // -> reviewed
 
-	g, err := gorm.Open(gormpostgres.New(gormpostgres.Config{DSN: databaseURL}), &gorm.Config{})
-	require.NoError(t, err)
-	sqlDB, err := g.DB()
-	require.NoError(t, err)
-	sqlDB.SetMaxOpenConns(2)
-	t.Cleanup(func() { _ = sqlDB.Close() })
+	g := openRawDB(t)
 
 	// No outbox rows yet (publisher was off during API calls).
 	require.Equal(t, int64(0), outboxCount(t, g, eventID))
@@ -53,8 +46,7 @@ func TestChecker_ReviewedToPlanned_EnqueuesStatusChangedToCreator(t *testing.T) 
 
 	require.NoError(t, chk.CheckMaintenance()) // reviewed -> planned
 
-	var rows []db.NotificationOutbox
-	require.NoError(t, g.Where("incident_id = ?", eventID).Find(&rows).Error)
+	rows := queryOutbox(t, g, "incident_id = $1", eventID)
 	require.Len(t, rows, 1, "one notification per real transition")
 	assert.Equal(t, db.NotificationKindStatusChanged, rows[0].Kind)
 	assert.Equal(t, "test@example.com", rows[0].Recipient, "planned notifies creator only")
@@ -68,12 +60,7 @@ func TestChecker_NoTransition_EnqueuesNothing(t *testing.T) {
 	resp := createEventOK(t, r, maintenanceData(), adminToken) // admin -> planned (future start)
 	eventID := resp.Result[0].IncidentID
 
-	g, err := gorm.Open(gormpostgres.New(gormpostgres.Config{DSN: databaseURL}), &gorm.Config{})
-	require.NoError(t, err)
-	sqlDB, err := g.DB()
-	require.NoError(t, err)
-	sqlDB.SetMaxOpenConns(2)
-	t.Cleanup(func() { _ = sqlDB.Close() })
+	g := openRawDB(t)
 
 	chk, err := checker.New(notifCheckerConfig(), zap.NewNop())
 	require.NoError(t, err)
