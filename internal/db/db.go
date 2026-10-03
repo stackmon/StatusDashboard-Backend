@@ -310,8 +310,12 @@ func (db *DB) SaveIncidentTx(tx *Tx, inc *Incident) (uint, error) {
 	inc.CreatedAt = &createdAt
 	inc.ModifiedAt = &modifiedAt
 
+	if inc.Text == nil || *inc.Text == "" {
+		return 0, ErrIncidentTextRequired
+	}
+
 	create := c.Incident.Create().
-		SetText(valueOr(inc.Text, "")).
+		SetText(*inc.Text).
 		SetStartDate(valueOr(inc.StartDate, now)).
 		SetImpact(valueOr(inc.Impact, 0)).
 		SetSystem(inc.System).

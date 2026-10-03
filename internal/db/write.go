@@ -74,20 +74,34 @@ func dropIncidentComponent(inc *Incident, componentID uint) {
 }
 
 // saveIncidentFull writes every incident column and reconciles the component
-// associations. nil optional values clear the column instead of being skipped.
+// associations. created_at defaults to now and modified_at is stamped on every
+// save; nil optional values clear their column instead of being skipped.
 func saveIncidentFull(ctx context.Context, c *ent.Client, inc *Incident) error {
+	if inc.Text == nil || *inc.Text == "" {
+		return ErrIncidentTextRequired
+	}
 	if inc.StartDate == nil {
 		return ErrIncidentStartDateRequired
 	}
 
+	now := time.Now().UTC()
+	createdAt := now
+	if inc.CreatedAt != nil {
+		createdAt = *inc.CreatedAt
+	}
+	inc.CreatedAt = &createdAt
+	inc.ModifiedAt = &now
+
 	update := c.Incident.UpdateOneID(int(inc.ID)).
-		SetText(valueOr(inc.Text, "")).
+		SetText(*inc.Text).
 		SetStartDate(*inc.StartDate).
 		SetImpact(valueOr(inc.Impact, 0)).
 		SetSystem(inc.System).
 		SetType(incident.Type(inc.Type)).
 		SetStatus(string(inc.Status)).
-		SetVersion(valueOr(inc.Version, 1))
+		SetVersion(valueOr(inc.Version, 1)).
+		SetCreatedAt(createdAt).
+		SetModifiedAt(now)
 
 	applyIncidentOptionalColumns(update, inc)
 
@@ -110,16 +124,6 @@ func applyIncidentOptionalColumns(update *ent.IncidentUpdateOne, inc *Incident) 
 		update.SetEndDate(*inc.EndDate)
 	} else {
 		update.ClearEndDate()
-	}
-	if inc.CreatedAt != nil {
-		update.SetCreatedAt(*inc.CreatedAt)
-	} else {
-		update.ClearCreatedAt()
-	}
-	if inc.ModifiedAt != nil {
-		update.SetModifiedAt(*inc.ModifiedAt)
-	} else {
-		update.ClearModifiedAt()
 	}
 	if inc.DeletedAt != nil {
 		update.SetDeletedAt(*inc.DeletedAt)
