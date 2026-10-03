@@ -25,7 +25,7 @@ func (Incident) Fields() []ent.Field {
 		field.Int("id").
 			SchemaType(map[string]string{"postgres": "serial"}),
 		field.String("text").NotEmpty(),
-		field.String("description").Optional().
+		field.String("description").Optional().Nillable().
 			SchemaType(map[string]string{"postgres": "varchar(1500)"}),
 		field.Time("start_date").
 			SchemaType(map[string]string{"postgres": "timestamp"}),
@@ -45,9 +45,9 @@ func (Incident) Fields() []ent.Field {
 			SchemaType(map[string]string{"postgres": "timestamp"}),
 		field.Time("deleted_at").Optional().
 			SchemaType(map[string]string{"postgres": "timestamp"}),
-		field.String("created_by").Optional().
+		field.String("created_by").Optional().Nillable().
 			SchemaType(map[string]string{"postgres": "varchar(255)"}),
-		field.String("contact_email").Optional().
+		field.String("contact_email").Optional().Nillable().
 			SchemaType(map[string]string{"postgres": "varchar(255)"}),
 		field.Int("version").Default(1).
 			SchemaType(map[string]string{"postgres": "integer"}),

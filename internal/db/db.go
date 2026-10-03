@@ -6,12 +6,19 @@ import (
 	"fmt"
 	"time"
 
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
 	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"moul.io/zapgorm2"
 
+	"github.com/stackmon/otc-status-dashboard/ent"
+	"github.com/stackmon/otc-status-dashboard/ent/component"
+	"github.com/stackmon/otc-status-dashboard/ent/componentattr"
+	"github.com/stackmon/otc-status-dashboard/ent/incident"
+	"github.com/stackmon/otc-status-dashboard/ent/incidentstatus"
 	"github.com/stackmon/otc-status-dashboard/internal/conf"
 	"github.com/stackmon/otc-status-dashboard/internal/event"
 )
@@ -26,8 +33,11 @@ const (
 	dbConnMaxIdleTime = 30 * time.Second
 )
 
+// DB is the storage facade. Both ORMs share one connection pool: methods that
+// have been migrated run on Ent, the rest still run on GORM.
 type DB struct {
 	g *gorm.DB
+	e *ent.Client
 }
 
 func New(c *conf.Config) (*DB, error) {
@@ -61,7 +71,9 @@ func New(c *conf.Config) (*DB, error) {
 	sqlDB.SetConnMaxLifetime(dbConnMaxLifetime)
 	sqlDB.SetConnMaxIdleTime(dbConnMaxIdleTime)
 
-	return &DB{g: g}, nil
+	e := ent.NewClient(ent.Driver(entsql.OpenDB(dialect.Postgres, sqlDB)))
+
+	return &DB{g: g, e: e}, nil
 }
 
 func (db *DB) Close() error {
@@ -244,27 +256,30 @@ func (db *DB) GetEventsInternal(params ...*IncidentsParams) ([]*Incident, error)
 }
 
 func (db *DB) GetIncident(id int) (*Incident, error) {
-	inc := Incident{ID: uint(id)}
+	ctx := context.Background()
 
-	r := db.g.Model(&Incident{}).
-		Where(inc).
-		Preload("Statuses", func(db *gorm.DB) *gorm.DB {
-			return db.Order("id ASC")
+	e, err := db.e.Incident.Query().
+		Where(incident.IDEQ(id)).
+		WithComponents(func(q *ent.ComponentQuery) {
+			q.Select(component.FieldID, component.FieldName)
+			q.WithAttributes()
 		}).
-		Preload("Components", func(db *gorm.DB) *gorm.DB {
-			return db.Select("ID, Name")
-		}).
-		Preload("Components.Attrs").
-		First(&inc)
-
-	if r.Error != nil {
-		if errors.Is(r.Error, gorm.ErrRecordNotFound) {
+		First(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
 			return nil, ErrDBIncidentDSNotExist
 		}
-		return nil, r.Error
+		return nil, err
 	}
 
-	return &inc, nil
+	inc := incidentFromEnt(e)
+	grouped, err := db.statusesByIncident(ctx, []int{e.ID})
+	if err != nil {
+		return nil, err
+	}
+	attachStatuses([]*Incident{inc}, grouped)
+
+	return inc, nil
 }
 
 // WithTx runs fn inside a single transaction on the shared connection pool.
@@ -383,14 +398,13 @@ func (db *DB) AddComponentToIncident(inc *Incident, comp *Component, status Inci
 
 // ReOpenIncident the special function if you need to NULL your end_date.
 func (db *DB) ReOpenIncident(inc *Incident) error {
-	r := db.g.Model(&Incident{}).Where("id = ?", inc.ID).Updates(map[string]interface{}{
-		"end_date": nil,
-	})
-	if r.Error != nil {
-		return r.Error
+	err := db.e.Incident.UpdateOneID(int(inc.ID)).
+		ClearEndDate().
+		Exec(context.Background())
+	if ent.IsNotFound(err) {
+		return nil
 	}
-
-	return nil
+	return err
 }
 
 // GetEventsByComponentID retrieves all public events associated with a specific component ID.
@@ -490,56 +504,61 @@ func (db *DB) GetIncidentsByComponentAttr(attr *ComponentAttr, params ...*Incide
 	return incidents, nil
 }
 
-func (db *DB) GetOpenedIncidentsWithComponent(name string, attrs []ComponentAttr) (*Incident, error) {
-	comp := &Component{Name: name, Attrs: attrs}
-	r := db.g.Model(&Component{}).Preload("Attrs").Find(comp)
-	if r.Error != nil {
-		if errors.Is(r.Error, gorm.ErrRecordNotFound) {
-			return nil, ErrDBComponentDSNotExist
-		}
-		return nil, r.Error
+func (db *DB) GetOpenedIncidentsWithComponent(_ string, _ []ComponentAttr) (*Incident, error) {
+	ctx := context.Background()
+
+	// Legacy behaviour kept as-is: the component probe is not restricted to any
+	// name or attribute and the incident lookup carries no component filter, so
+	// this returns an arbitrary open incident.
+	if _, err := db.e.Component.Query().Exist(ctx); err != nil {
+		return nil, err
 	}
 
-	var incident Incident
-	r = db.g.Model(&Incident{}).
-		Preload("Statuses").
-		Preload("Components", func(db *gorm.DB) *gorm.DB {
-			return db.Select("ID")
+	e, err := db.e.Incident.Query().
+		WithComponents(func(q *ent.ComponentQuery) {
+			q.Select(component.FieldID)
 		}).
-		// Where("component_id = ?", comp.ID).
-		First(&incident)
-
-	if r.Error != nil {
-		return nil, r.Error
+		Order(incident.ByID(entsql.OrderAsc())).
+		First(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	return &incident, nil
+	inc := incidentFromEnt(e)
+	grouped, err := db.statusesByIncident(ctx, []int{e.ID})
+	if err != nil {
+		return nil, err
+	}
+	attachStatuses([]*Incident{inc}, grouped)
+
+	return inc, nil
 }
 
 func (db *DB) GetComponent(id int) (*Component, error) {
-	comp := &Component{ID: uint(id)}
-	r := db.g.Model(&Component{}).Preload("Attrs").First(comp)
-
-	if r.Error != nil {
-		if errors.Is(r.Error, gorm.ErrRecordNotFound) {
+	e, err := db.e.Component.Query().
+		Where(component.IDEQ(id)).
+		WithAttributes().
+		First(context.Background())
+	if err != nil {
+		if ent.IsNotFound(err) {
 			return nil, ErrDBComponentDSNotExist
 		}
-		return nil, r.Error
+		return nil, err
 	}
 
-	return comp, nil
+	comp := componentFromEnt(e)
+	return &comp, nil
 }
 
 func (db *DB) GetComponentsAsMap() (map[int]*Component, error) {
-	var components []Component
-	r := db.g.Model(&Component{}).Find(&components)
-
-	if r.Error != nil {
-		return nil, r.Error
+	rows, err := db.e.Component.Query().All(context.Background())
+	if err != nil {
+		return nil, err
 	}
 
-	var compMap = make(map[int]*Component)
-	for _, comp := range components {
+	compMap := make(map[int]*Component, len(rows))
+	for _, row := range rows {
+		comp := componentFromEnt(row)
 		compMap[int(comp.ID)] = &comp
 	}
 
@@ -547,22 +566,47 @@ func (db *DB) GetComponentsAsMap() (map[int]*Component, error) {
 }
 
 func (db *DB) GetComponentsWithValues() ([]Component, error) {
-	var components []Component
-	r := db.g.Model(&Component{}).Preload("Attrs").Find(&components)
+	rows, err := db.e.Component.Query().
+		WithAttributes().
+		All(context.Background())
+	if err != nil {
+		return nil, err
+	}
 
-	if r.Error != nil {
-		return nil, r.Error
+	components := make([]Component, 0, len(rows))
+	for _, row := range rows {
+		components = append(components, componentFromEnt(row))
 	}
 
 	return components, nil
 }
 
 func (db *DB) GetComponentsWithIncidents() ([]Component, error) {
-	var components []Component
-	r := db.g.Model(&Component{}).Preload("Attrs").Preload("Incidents").Preload("Incidents.Statuses").Find(&components)
+	ctx := context.Background()
 
-	if r.Error != nil {
-		return nil, r.Error
+	rows, err := db.e.Component.Query().
+		WithAttributes().
+		WithIncidents().
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var entIncidents []*ent.Incident
+	for _, row := range rows {
+		entIncidents = append(entIncidents, row.Edges.Incidents...)
+	}
+
+	grouped, err := db.statusesByIncident(ctx, incidentIDs(entIncidents))
+	if err != nil {
+		return nil, err
+	}
+
+	components := make([]Component, 0, len(rows))
+	for _, row := range rows {
+		comp := componentFromEnt(row)
+		attachStatuses(comp.Incidents, grouped)
+		components = append(components, comp)
 	}
 
 	return components, nil
@@ -570,44 +614,48 @@ func (db *DB) GetComponentsWithIncidents() ([]Component, error) {
 
 // GetComponentFromNameAttrs returns the Component from its name and region attribute.
 func (db *DB) GetComponentFromNameAttrs(name string, attr *ComponentAttr) (*Component, error) {
-	comp := Component{}
-	//nolint:lll
-	// You can reproduce this raw request
-	// select * from component join component_attribute ca on component.id=ca.component_id
-	// where component.id =
-	// (select component.id from component join component_attribute ca on component.id = ca.component_id and ca.value='EU-DE' and component.name='Cloud Container Engine');
-	subQuery := db.g.Model(&Component{}).
-		Select("component.id").
-		Joins("JOIN component_attribute ca ON ca.component_id = component.id").
-		Where("ca.value = ?", attr.Value).
-		Where("component.name = ?", name)
-	r := db.g.Model(&Component{}).Where("name = ?", name).
-		Where("id = (?)", subQuery).
-		Preload("Attrs").
-		First(&comp)
-
-	if r.Error != nil {
-		if errors.Is(r.Error, gorm.ErrRecordNotFound) {
+	e, err := db.e.Component.Query().
+		Where(
+			component.NameEQ(name),
+			component.HasAttributesWith(componentattr.ValueEQ(attr.Value)),
+		).
+		WithAttributes().
+		Order(component.ByID(entsql.OrderAsc())).
+		First(context.Background())
+	if err != nil {
+		if ent.IsNotFound(err) {
 			return nil, ErrDBComponentDSNotExist
 		}
-		return nil, r.Error
+		return nil, err
 	}
 
+	comp := componentFromEnt(e)
 	return &comp, nil
 }
 
 func (db *DB) SaveComponent(comp *Component) (uint, error) {
+	ctx := context.Background()
+
 	// Validate required region attribute
 	hasRegion := false
 	for _, attr := range comp.Attrs {
-		if attr.Name == "region" {
+		if attr.Name == regionAttrName {
 			hasRegion = true
 
 			// Check if component with same name and region exists
-			var exists Component
-			if err := db.g.Joins("JOIN component_attribute ca ON ca.component_id = component.id").
-				Where("component.name = ? AND ca.name = 'region' AND ca.value = ?",
-					comp.Name, attr.Value).First(&exists).Error; err == nil {
+			exists, err := db.e.Component.Query().
+				Where(
+					component.NameEQ(comp.Name),
+					component.HasAttributesWith(
+						componentattr.NameEQ(regionAttrName),
+						componentattr.ValueEQ(attr.Value),
+					),
+				).
+				Exist(ctx)
+			if err != nil {
+				return 0, err
+			}
+			if exists {
 				return 0, ErrDBComponentExists
 			}
 			break
@@ -618,11 +666,48 @@ func (db *DB) SaveComponent(comp *Component) (uint, error) {
 		return 0, fmt.Errorf("missing required region attribute")
 	}
 
-	// Create the component
-	if err := db.g.Create(comp).Error; err != nil {
+	now := time.Now().UTC()
+	if comp.CreatedAt == nil {
+		comp.CreatedAt = &now
+	}
+	if comp.ModifiedAt == nil {
+		comp.ModifiedAt = &now
+	}
+
+	tx, err := db.e.Tx(ctx)
+	if err != nil {
 		return 0, err
 	}
 
+	created, err := tx.Component.Create().
+		SetName(comp.Name).
+		SetCreatedAt(*comp.CreatedAt).
+		SetModifiedAt(*comp.ModifiedAt).
+		Save(ctx)
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, err
+	}
+
+	for i := range comp.Attrs {
+		attr, attrErr := tx.ComponentAttr.Create().
+			SetName(comp.Attrs[i].Name).
+			SetValue(comp.Attrs[i].Value).
+			SetComponentID(created.ID).
+			Save(ctx)
+		if attrErr != nil {
+			_ = tx.Rollback()
+			return 0, attrErr
+		}
+		comp.Attrs[i].ID = uint(attr.ID)
+		comp.Attrs[i].ComponentID = uint(created.ID)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	comp.ID = uint(created.ID)
 	return comp.ID, nil
 }
 
@@ -773,40 +858,116 @@ func (db *DB) IncreaseIncidentImpact(inc *Incident, impact int) (*Incident, erro
 		Status:     event.OutDatedSystem,
 		Text:       text,
 		Timestamp:  timeNow,
+		CreatedAt:  &timeNow,
+		ModifiedAt: &timeNow,
 	})
 	inc.Impact = &impact
+	inc.ModifiedAt = &timeNow
 
-	if r := db.g.Updates(inc); r.Error != nil {
-		return nil, r.Error
+	// Only non-zero fields are written for the incident row, mirroring the
+	// previous struct-based update. incident_status has no Ent edge, so the
+	// appended status row is inserted directly in the same transaction.
+	ctx := context.Background()
+	tx, err := db.e.Tx(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	update := tx.Incident.UpdateOneID(int(inc.ID))
+	if inc.Text != nil && *inc.Text != "" {
+		update.SetText(*inc.Text)
+	}
+	if inc.Description != nil {
+		update.SetDescription(*inc.Description)
+	}
+	if inc.StartDate != nil {
+		update.SetStartDate(*inc.StartDate)
+	}
+	if inc.EndDate != nil {
+		update.SetEndDate(*inc.EndDate)
+	}
+	update.SetImpact(*inc.Impact)
+	if inc.Status != "" {
+		update.SetStatus(string(inc.Status))
+	}
+	if inc.System {
+		update.SetSystem(true)
+	}
+	if inc.Type != "" {
+		update.SetType(incident.Type(inc.Type))
+	}
+	if inc.CreatedAt != nil {
+		update.SetCreatedAt(*inc.CreatedAt)
+	}
+	update.SetModifiedAt(timeNow)
+	if inc.CreatedBy != nil {
+		update.SetCreatedBy(*inc.CreatedBy)
+	}
+	if inc.ContactEmail != nil {
+		update.SetContactEmail(*inc.ContactEmail)
+	}
+	if inc.Version != nil {
+		update.SetVersion(*inc.Version)
+	}
+
+	if err = update.Exec(ctx); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+
+	_, err = tx.IncidentStatus.Create().
+		SetIncidentID(int(inc.ID)).
+		SetStatus(string(event.OutDatedSystem)).
+		SetText(text).
+		SetTimestamp(timeNow).
+		SetCreatedAt(timeNow).
+		SetModifiedAt(timeNow).
+		Save(ctx)
+	if err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, err
 	}
 
 	return inc, nil
 }
 
 func (db *DB) GetUniqueAttributeValues(attrName string) ([]string, error) {
-	var values []string
-	r := db.g.Model(&ComponentAttr{}).
-		Select("DISTINCT value").
-		Where("name = ?", attrName).
-		Order("value ASC").
-		Pluck("value", &values)
+	rows, err := db.e.ComponentAttr.Query().
+		Where(componentattr.NameEQ(attrName)).
+		Select(componentattr.FieldValue).
+		Order(componentattr.ByValue(entsql.OrderAsc())).
+		All(context.Background())
+	if err != nil {
+		return nil, err
+	}
 
-	if r.Error != nil {
-		return nil, r.Error
+	values := make([]string, 0, len(rows))
+	for i, row := range rows {
+		if i > 0 && rows[i-1].Value == row.Value {
+			continue
+		}
+		values = append(values, row.Value)
 	}
 
 	return values, nil
 }
 
 func (db *DB) GetEventUpdates(incidentID uint) ([]IncidentStatus, error) {
-	var updates []IncidentStatus
-	r := db.g.Model(&IncidentStatus{}).
-		Where("incident_id = ?", incidentID).
-		Order("id ASC").
-		Find(&updates)
+	rows, err := db.e.IncidentStatus.Query().
+		Where(incidentstatus.IncidentID(int(incidentID))).
+		Order(incidentstatus.ByID(entsql.OrderAsc())).
+		All(context.Background())
+	if err != nil {
+		return nil, err
+	}
 
-	if r.Error != nil {
-		return nil, r.Error
+	updates := make([]IncidentStatus, 0, len(rows))
+	for _, row := range rows {
+		updates = append(updates, incidentStatusFromEnt(row))
 	}
 
 	return updates, nil

@@ -38,9 +38,9 @@ func (IncidentStatus) Fields() []ent.Field {
 			SchemaType(map[string]string{"postgres": "timestamp"}),
 		field.Time("deleted_at").Optional().
 			SchemaType(map[string]string{"postgres": "timestamp"}),
-		field.String("created_by").Optional().
+		field.String("created_by").Optional().Nillable().
 			SchemaType(map[string]string{"postgres": "varchar(255)"}),
-		field.String("modified_by").Optional().
+		field.String("modified_by").Optional().Nillable().
 			SchemaType(map[string]string{"postgres": "varchar(255)"}),
 	}
 }

@@ -338,7 +338,7 @@ func (_c *IncidentCreate) createSpec() (*Incident, *sqlgraph.CreateSpec) {
 	}
 	if value, ok := _c.mutation.Description(); ok {
 		_spec.SetField(incident.FieldDescription, field.TypeString, value)
-		_node.Description = value
+		_node.Description = &value
 	}
 	if value, ok := _c.mutation.StartDate(); ok {
 		_spec.SetField(incident.FieldStartDate, field.TypeTime, value)
@@ -378,11 +378,11 @@ func (_c *IncidentCreate) createSpec() (*Incident, *sqlgraph.CreateSpec) {
 	}
 	if value, ok := _c.mutation.CreatedBy(); ok {
 		_spec.SetField(incident.FieldCreatedBy, field.TypeString, value)
-		_node.CreatedBy = value
+		_node.CreatedBy = &value
 	}
 	if value, ok := _c.mutation.ContactEmail(); ok {
 		_spec.SetField(incident.FieldContactEmail, field.TypeString, value)
-		_node.ContactEmail = value
+		_node.ContactEmail = &value
 	}
 	if value, ok := _c.mutation.Version(); ok {
 		_spec.SetField(incident.FieldVersion, field.TypeInt, value)

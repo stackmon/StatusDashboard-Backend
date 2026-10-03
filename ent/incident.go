@@ -20,7 +20,7 @@ type Incident struct {
 	// Text holds the value of the "text" field.
 	Text string `json:"text,omitempty"`
 	// Description holds the value of the "description" field.
-	Description string `json:"description,omitempty"`
+	Description *string `json:"description,omitempty"`
 	// StartDate holds the value of the "start_date" field.
 	StartDate time.Time `json:"start_date,omitempty"`
 	// EndDate holds the value of the "end_date" field.
@@ -40,9 +40,9 @@ type Incident struct {
 	// DeletedAt holds the value of the "deleted_at" field.
 	DeletedAt time.Time `json:"deleted_at,omitempty"`
 	// CreatedBy holds the value of the "created_by" field.
-	CreatedBy string `json:"created_by,omitempty"`
+	CreatedBy *string `json:"created_by,omitempty"`
 	// ContactEmail holds the value of the "contact_email" field.
-	ContactEmail string `json:"contact_email,omitempty"`
+	ContactEmail *string `json:"contact_email,omitempty"`
 	// Version holds the value of the "version" field.
 	Version int `json:"version,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
@@ -124,7 +124,8 @@ func (_m *Incident) assignValues(columns []string, values []any) error {
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field description", values[i])
 			} else if value.Valid {
-				_m.Description = value.String
+				_m.Description = new(string)
+				*_m.Description = value.String
 			}
 		case incident.FieldStartDate:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -184,13 +185,15 @@ func (_m *Incident) assignValues(columns []string, values []any) error {
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field created_by", values[i])
 			} else if value.Valid {
-				_m.CreatedBy = value.String
+				_m.CreatedBy = new(string)
+				*_m.CreatedBy = value.String
 			}
 		case incident.FieldContactEmail:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field contact_email", values[i])
 			} else if value.Valid {
-				_m.ContactEmail = value.String
+				_m.ContactEmail = new(string)
+				*_m.ContactEmail = value.String
 			}
 		case incident.FieldVersion:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -247,8 +250,10 @@ func (_m *Incident) String() string {
 	builder.WriteString("text=")
 	builder.WriteString(_m.Text)
 	builder.WriteString(", ")
-	builder.WriteString("description=")
-	builder.WriteString(_m.Description)
+	if v := _m.Description; v != nil {
+		builder.WriteString("description=")
+		builder.WriteString(*v)
+	}
 	builder.WriteString(", ")
 	builder.WriteString("start_date=")
 	builder.WriteString(_m.StartDate.Format(time.ANSIC))
@@ -277,11 +282,15 @@ func (_m *Incident) String() string {
 	builder.WriteString("deleted_at=")
 	builder.WriteString(_m.DeletedAt.Format(time.ANSIC))
 	builder.WriteString(", ")
-	builder.WriteString("created_by=")
-	builder.WriteString(_m.CreatedBy)
+	if v := _m.CreatedBy; v != nil {
+		builder.WriteString("created_by=")
+		builder.WriteString(*v)
+	}
 	builder.WriteString(", ")
-	builder.WriteString("contact_email=")
-	builder.WriteString(_m.ContactEmail)
+	if v := _m.ContactEmail; v != nil {
+		builder.WriteString("contact_email=")
+		builder.WriteString(*v)
+	}
 	builder.WriteString(", ")
 	builder.WriteString("version=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Version))

@@ -32,9 +32,9 @@ type IncidentStatus struct {
 	// DeletedAt holds the value of the "deleted_at" field.
 	DeletedAt time.Time `json:"deleted_at,omitempty"`
 	// CreatedBy holds the value of the "created_by" field.
-	CreatedBy string `json:"created_by,omitempty"`
+	CreatedBy *string `json:"created_by,omitempty"`
 	// ModifiedBy holds the value of the "modified_by" field.
-	ModifiedBy   string `json:"modified_by,omitempty"`
+	ModifiedBy   *string `json:"modified_by,omitempty"`
 	selectValues sql.SelectValues
 }
 
@@ -116,13 +116,15 @@ func (_m *IncidentStatus) assignValues(columns []string, values []any) error {
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field created_by", values[i])
 			} else if value.Valid {
-				_m.CreatedBy = value.String
+				_m.CreatedBy = new(string)
+				*_m.CreatedBy = value.String
 			}
 		case incidentstatus.FieldModifiedBy:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field modified_by", values[i])
 			} else if value.Valid {
-				_m.ModifiedBy = value.String
+				_m.ModifiedBy = new(string)
+				*_m.ModifiedBy = value.String
 			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
@@ -181,11 +183,15 @@ func (_m *IncidentStatus) String() string {
 	builder.WriteString("deleted_at=")
 	builder.WriteString(_m.DeletedAt.Format(time.ANSIC))
 	builder.WriteString(", ")
-	builder.WriteString("created_by=")
-	builder.WriteString(_m.CreatedBy)
+	if v := _m.CreatedBy; v != nil {
+		builder.WriteString("created_by=")
+		builder.WriteString(*v)
+	}
 	builder.WriteString(", ")
-	builder.WriteString("modified_by=")
-	builder.WriteString(_m.ModifiedBy)
+	if v := _m.ModifiedBy; v != nil {
+		builder.WriteString("modified_by=")
+		builder.WriteString(*v)
+	}
 	builder.WriteByte(')')
 	return builder.String()
 }

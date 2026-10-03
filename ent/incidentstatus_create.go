@@ -246,11 +246,11 @@ func (_c *IncidentStatusCreate) createSpec() (*IncidentStatus, *sqlgraph.CreateS
 	}
 	if value, ok := _c.mutation.CreatedBy(); ok {
 		_spec.SetField(incidentstatus.FieldCreatedBy, field.TypeString, value)
-		_node.CreatedBy = value
+		_node.CreatedBy = &value
 	}
 	if value, ok := _c.mutation.ModifiedBy(); ok {
 		_spec.SetField(incidentstatus.FieldModifiedBy, field.TypeString, value)
-		_node.ModifiedBy = value
+		_node.ModifiedBy = &value
 	}
 	return _node, _spec
 }

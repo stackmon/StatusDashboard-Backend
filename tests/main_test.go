@@ -12,7 +12,7 @@ import (
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -44,6 +44,22 @@ const (
 var databaseURL = "postgresql://%s:%s@localhost:%s/%s"
 
 func TestMain(m *testing.M) {
+	// SD_TEST_DSN points the suite at an existing Postgres instead of starting a
+	// testcontainer. The DSN must be a complete lib/pq URL, including
+	// sslmode=disable for servers without TLS, and must reference a scratch
+	// database: the suite truncates and rewrites its tables.
+	if dsn := os.Getenv("SD_TEST_DSN"); dsn != "" {
+		databaseURL = dsn
+		if errMigr := applyMigrations(dsn); errMigr != nil {
+			log.Printf("failed to apply migrations: %s", errMigr)
+			os.Exit(1)
+		}
+
+		code := m.Run()
+		testIDP.server.Close()
+		os.Exit(code)
+	}
+
 	ctx := context.Background()
 	container, err := postgres.Run(ctx,
 		pgImage,
@@ -96,10 +112,12 @@ func applyMigrations(dbURL string) error {
 	// Get the project root directory
 	migrationsPath := filepath.Join("..", "db", "migrations")
 
-	m, err := migrate.New(
-		fmt.Sprintf("file://%s", migrationsPath),
-		dbURL,
-	)
+	src, err := iofs.New(os.DirFS(migrationsPath), ".")
+	if err != nil {
+		return fmt.Errorf("failed to open migrations source: %w", err)
+	}
+
+	m, err := migrate.NewWithSourceInstance("iofs", src, dbURL)
 	if err != nil {
 		return fmt.Errorf("failed to create migrate instance: %w", err)
 	}

@@ -1475,7 +1475,7 @@ func (m *IncidentMutation) Description() (r string, exists bool) {
 // OldDescription returns the old "description" field's value of the Incident entity.
 // If the Incident object wasn't provided to the builder, the object is fetched from the database.
 // An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *IncidentMutation) OldDescription(ctx context.Context) (v string, err error) {
+func (m *IncidentMutation) OldDescription(ctx context.Context) (v *string, err error) {
 	if !m.op.Is(OpUpdateOne) {
 		return v, errors.New("OldDescription is only allowed on UpdateOne operations")
 	}
@@ -1933,7 +1933,7 @@ func (m *IncidentMutation) CreatedBy() (r string, exists bool) {
 // OldCreatedBy returns the old "created_by" field's value of the Incident entity.
 // If the Incident object wasn't provided to the builder, the object is fetched from the database.
 // An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *IncidentMutation) OldCreatedBy(ctx context.Context) (v string, err error) {
+func (m *IncidentMutation) OldCreatedBy(ctx context.Context) (v *string, err error) {
 	if !m.op.Is(OpUpdateOne) {
 		return v, errors.New("OldCreatedBy is only allowed on UpdateOne operations")
 	}
@@ -1982,7 +1982,7 @@ func (m *IncidentMutation) ContactEmail() (r string, exists bool) {
 // OldContactEmail returns the old "contact_email" field's value of the Incident entity.
 // If the Incident object wasn't provided to the builder, the object is fetched from the database.
 // An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *IncidentMutation) OldContactEmail(ctx context.Context) (v string, err error) {
+func (m *IncidentMutation) OldContactEmail(ctx context.Context) (v *string, err error) {
 	if !m.op.Is(OpUpdateOne) {
 		return v, errors.New("OldContactEmail is only allowed on UpdateOne operations")
 	}
@@ -3186,7 +3186,7 @@ func (m *IncidentStatusMutation) CreatedBy() (r string, exists bool) {
 // OldCreatedBy returns the old "created_by" field's value of the IncidentStatus entity.
 // If the IncidentStatus object wasn't provided to the builder, the object is fetched from the database.
 // An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *IncidentStatusMutation) OldCreatedBy(ctx context.Context) (v string, err error) {
+func (m *IncidentStatusMutation) OldCreatedBy(ctx context.Context) (v *string, err error) {
 	if !m.op.Is(OpUpdateOne) {
 		return v, errors.New("OldCreatedBy is only allowed on UpdateOne operations")
 	}
@@ -3235,7 +3235,7 @@ func (m *IncidentStatusMutation) ModifiedBy() (r string, exists bool) {
 // OldModifiedBy returns the old "modified_by" field's value of the IncidentStatus entity.
 // If the IncidentStatus object wasn't provided to the builder, the object is fetched from the database.
 // An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *IncidentStatusMutation) OldModifiedBy(ctx context.Context) (v string, err error) {
+func (m *IncidentStatusMutation) OldModifiedBy(ctx context.Context) (v *string, err error) {
 	if !m.op.Is(OpUpdateOne) {
 		return v, errors.New("OldModifiedBy is only allowed on UpdateOne operations")
 	}
