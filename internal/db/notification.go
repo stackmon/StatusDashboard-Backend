@@ -56,8 +56,13 @@ func (db *DB) Enqueue(ctx context.Context, tx *Tx, row NotificationOutbox) error
 			return ErrNotificationDuplicate
 		}
 
-		_, err = newOutboxCreate(c, row).Save(ctx)
-		return err
+		if _, err = newOutboxCreate(c, row).Save(ctx); err != nil {
+			if ent.IsConstraintError(err) {
+				return ErrNotificationDuplicate
+			}
+			return err
+		}
+		return nil
 	})
 }
 

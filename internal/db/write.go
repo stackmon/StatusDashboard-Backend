@@ -143,8 +143,8 @@ func applyIncidentOptionalColumns(update *ent.IncidentUpdateOne, inc *Incident) 
 }
 
 // reconcileIncidentComponents makes the stored component edge match inc.Components
-// exactly; every incident read loads the edge unfiltered, so inc.Components is the
-// full authoritative set.
+// exactly. Callers pass components that already exist, so only the join rows are
+// reconciled: a component absent from the component table is not created.
 func reconcileIncidentComponents(ctx context.Context, c *ent.Client, inc *Incident) error {
 	want := make(map[int]struct{}, len(inc.Components))
 	for i := range inc.Components {

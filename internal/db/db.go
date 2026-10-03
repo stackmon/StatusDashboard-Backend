@@ -294,6 +294,10 @@ func (db *DB) WithTx(ctx context.Context, fn func(tx *Tx) error) error {
 
 // SaveIncidentTx creates an incident using the provided transaction.
 func (db *DB) SaveIncidentTx(tx *Tx, inc *Incident) (uint, error) {
+	if inc.Text == nil || *inc.Text == "" {
+		return 0, ErrIncidentTextRequired
+	}
+
 	ctx := context.Background()
 	c := db.clientFor(tx)
 
@@ -309,10 +313,6 @@ func (db *DB) SaveIncidentTx(tx *Tx, inc *Incident) (uint, error) {
 
 	inc.CreatedAt = &createdAt
 	inc.ModifiedAt = &modifiedAt
-
-	if inc.Text == nil || *inc.Text == "" {
-		return 0, ErrIncidentTextRequired
-	}
 
 	create := c.Incident.Create().
 		SetText(*inc.Text).

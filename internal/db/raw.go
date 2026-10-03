@@ -10,6 +10,10 @@ import (
 	"github.com/stackmon/otc-status-dashboard/ent/incident"
 )
 
+// incidentIDChunkSize caps the IN predicate because PostgreSQL rejects
+// queries with more than 65535 bound parameters.
+const incidentIDChunkSize = 1000
+
 // incidentsByComponentAttrQuery lists incident ids matched through a component
 // attribute, applying the public visibility rules inline.
 const incidentsByComponentAttrQuery = `
@@ -49,20 +53,24 @@ func (db *DB) incidentsByIDs(ctx context.Context, ids []int) ([]*Incident, error
 		return []*Incident{}, nil
 	}
 
-	rows, err := db.e.Incident.Query().
-		Where(incident.IDIn(ids...)).
-		WithComponents(func(q *ent.ComponentQuery) {
-			q.Select(component.FieldID, component.FieldName)
-			q.WithAttributes()
-		}).
-		All(ctx)
-	if err != nil {
-		return nil, err
-	}
+	byID := make(map[int]*Incident, len(ids))
+	for start := 0; start < len(ids); start += incidentIDChunkSize {
+		end := min(start+incidentIDChunkSize, len(ids))
 
-	byID := make(map[int]*Incident, len(rows))
-	for _, row := range rows {
-		byID[row.ID] = incidentFromEnt(row)
+		rows, err := db.e.Incident.Query().
+			Where(incident.IDIn(ids[start:end]...)).
+			WithComponents(func(q *ent.ComponentQuery) {
+				q.Select(component.FieldID, component.FieldName)
+				q.WithAttributes()
+			}).
+			All(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, row := range rows {
+			byID[row.ID] = incidentFromEnt(row)
+		}
 	}
 
 	incidents := make([]*Incident, 0, len(ids))

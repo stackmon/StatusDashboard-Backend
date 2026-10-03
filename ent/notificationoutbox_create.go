@@ -327,7 +327,7 @@ func (_c *NotificationOutboxCreate) createSpec() (*NotificationOutbox, *sqlgraph
 	}
 	if value, ok := _c.mutation.LockedBy(); ok {
 		_spec.SetField(notificationoutbox.FieldLockedBy, field.TypeString, value)
-		_node.LockedBy = value
+		_node.LockedBy = &value
 	}
 	if value, ok := _c.mutation.LockedAt(); ok {
 		_spec.SetField(notificationoutbox.FieldLockedAt, field.TypeTime, value)
@@ -335,7 +335,7 @@ func (_c *NotificationOutboxCreate) createSpec() (*NotificationOutbox, *sqlgraph
 	}
 	if value, ok := _c.mutation.LastError(); ok {
 		_spec.SetField(notificationoutbox.FieldLastError, field.TypeString, value)
-		_node.LastError = value
+		_node.LastError = &value
 	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(notificationoutbox.FieldCreatedAt, field.TypeTime, value)

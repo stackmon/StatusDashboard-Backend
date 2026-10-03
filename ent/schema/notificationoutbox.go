@@ -46,11 +46,11 @@ func (NotificationOutbox) Fields() []ent.Field {
 			SchemaType(map[string]string{"postgres": "integer"}),
 		field.Time("next_attempt_at").Optional().
 			SchemaType(map[string]string{"postgres": "timestamptz"}),
-		field.String("locked_by").Optional().
+		field.String("locked_by").Optional().Nillable().
 			SchemaType(map[string]string{"postgres": "varchar(255)"}),
 		field.Time("locked_at").Optional().
 			SchemaType(map[string]string{"postgres": "timestamptz"}),
-		field.Text("last_error").Optional(),
+		field.Text("last_error").Optional().Nillable(),
 		field.Time("created_at").
 			Annotations(entsql.DefaultExpr("NOW()")).
 			SchemaType(map[string]string{"postgres": "timestamptz"}),

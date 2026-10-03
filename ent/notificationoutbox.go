@@ -38,11 +38,11 @@ type NotificationOutbox struct {
 	// NextAttemptAt holds the value of the "next_attempt_at" field.
 	NextAttemptAt time.Time `json:"next_attempt_at,omitempty"`
 	// LockedBy holds the value of the "locked_by" field.
-	LockedBy string `json:"locked_by,omitempty"`
+	LockedBy *string `json:"locked_by,omitempty"`
 	// LockedAt holds the value of the "locked_at" field.
 	LockedAt time.Time `json:"locked_at,omitempty"`
 	// LastError holds the value of the "last_error" field.
-	LastError string `json:"last_error,omitempty"`
+	LastError *string `json:"last_error,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// UpdatedAt holds the value of the "updated_at" field.
@@ -167,7 +167,8 @@ func (_m *NotificationOutbox) assignValues(columns []string, values []any) error
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field locked_by", values[i])
 			} else if value.Valid {
-				_m.LockedBy = value.String
+				_m.LockedBy = new(string)
+				*_m.LockedBy = value.String
 			}
 		case notificationoutbox.FieldLockedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -179,7 +180,8 @@ func (_m *NotificationOutbox) assignValues(columns []string, values []any) error
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field last_error", values[i])
 			} else if value.Valid {
-				_m.LastError = value.String
+				_m.LastError = new(string)
+				*_m.LastError = value.String
 			}
 		case notificationoutbox.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -261,14 +263,18 @@ func (_m *NotificationOutbox) String() string {
 	builder.WriteString("next_attempt_at=")
 	builder.WriteString(_m.NextAttemptAt.Format(time.ANSIC))
 	builder.WriteString(", ")
-	builder.WriteString("locked_by=")
-	builder.WriteString(_m.LockedBy)
+	if v := _m.LockedBy; v != nil {
+		builder.WriteString("locked_by=")
+		builder.WriteString(*v)
+	}
 	builder.WriteString(", ")
 	builder.WriteString("locked_at=")
 	builder.WriteString(_m.LockedAt.Format(time.ANSIC))
 	builder.WriteString(", ")
-	builder.WriteString("last_error=")
-	builder.WriteString(_m.LastError)
+	if v := _m.LastError; v != nil {
+		builder.WriteString("last_error=")
+		builder.WriteString(*v)
+	}
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))

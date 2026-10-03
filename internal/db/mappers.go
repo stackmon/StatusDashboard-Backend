@@ -168,15 +168,11 @@ func notificationOutboxFromEnt(e *ent.NotificationOutbox) NotificationOutbox {
 	if !e.NextAttemptAt.IsZero() {
 		row.NextAttemptAt = &e.NextAttemptAt
 	}
-	if e.LockedBy != "" {
-		row.LockedBy = &e.LockedBy
-	}
+	row.LockedBy = e.LockedBy
 	if !e.LockedAt.IsZero() {
 		row.LockedAt = &e.LockedAt
 	}
-	if e.LastError != "" {
-		row.LastError = &e.LastError
-	}
+	row.LastError = e.LastError
 	return row
 }
 
