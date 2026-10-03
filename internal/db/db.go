@@ -269,27 +269,27 @@ func (db *DB) GetIncident(id int) (*Incident, error) {
 
 // WithTx runs fn inside a single transaction on the shared connection pool.
 // Callers use it to write a business change and enqueue its notification atomically.
-func (db *DB) WithTx(ctx context.Context, fn func(tx *gorm.DB) error) error {
-	return db.g.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return fn(tx)
+func (db *DB) WithTx(ctx context.Context, fn func(tx *Tx) error) error {
+	return db.g.WithContext(ctx).Transaction(func(gtx *gorm.DB) error {
+		return fn(&Tx{g: gtx})
 	})
 }
 
 // SaveIncidentTx creates an incident using the provided transaction.
-func (db *DB) SaveIncidentTx(tx *gorm.DB, inc *Incident) (uint, error) {
-	if err := tx.Create(inc).Error; err != nil {
+func (db *DB) SaveIncidentTx(tx *Tx, inc *Incident) (uint, error) {
+	if err := tx.g.Create(inc).Error; err != nil {
 		return 0, err
 	}
 	return inc.ID, nil
 }
 
 func (db *DB) SaveIncident(inc *Incident) (uint, error) {
-	return db.SaveIncidentTx(db.g, inc)
+	return db.SaveIncidentTx(&Tx{g: db.g}, inc)
 }
 
 // ModifyIncidentTx applies a modification (with maintenance optimistic locking and
 // new status inserts) using the provided transaction.
-func (db *DB) ModifyIncidentTx(tx *gorm.DB, inc *Incident) error {
+func (db *DB) ModifyIncidentTx(tx *Tx, inc *Incident) error {
 	if inc.Version == nil {
 		return errors.New("version is required for event modification")
 	}
@@ -298,7 +298,7 @@ func (db *DB) ModifyIncidentTx(tx *gorm.DB, inc *Incident) error {
 	newVersion := expectedVersion + 1
 	inc.Version = &newVersion
 
-	query := tx.Model(&Incident{}).Where("id = ?", inc.ID)
+	query := tx.g.Model(&Incident{}).Where("id = ?", inc.ID)
 
 	if inc.Type == event.TypeMaintenance {
 		query = query.Where("version = ?", expectedVersion)
@@ -321,7 +321,7 @@ func (db *DB) ModifyIncidentTx(tx *gorm.DB, inc *Incident) error {
 		if inc.Statuses[i].IncidentID == 0 {
 			inc.Statuses[i].IncidentID = inc.ID
 		}
-		if err := tx.Create(&inc.Statuses[i]).Error; err != nil {
+		if err := tx.g.Create(&inc.Statuses[i]).Error; err != nil {
 			return err
 		}
 	}
@@ -330,8 +330,8 @@ func (db *DB) ModifyIncidentTx(tx *gorm.DB, inc *Incident) error {
 }
 
 func (db *DB) ModifyIncident(inc *Incident) error {
-	return db.g.Transaction(func(tx *gorm.DB) error {
-		return db.ModifyIncidentTx(tx, inc)
+	return db.g.Transaction(func(gtx *gorm.DB) error {
+		return db.ModifyIncidentTx(&Tx{g: gtx}, inc)
 	})
 }
 
@@ -814,10 +814,10 @@ func (db *DB) GetEventUpdates(incidentID uint) ([]IncidentStatus, error) {
 
 // ModifyEventUpdateTx patches an event status update's text using the provided
 // transaction and returns the updated row.
-func (db *DB) ModifyEventUpdateTx(tx *gorm.DB, update IncidentStatus) (IncidentStatus, error) {
+func (db *DB) ModifyEventUpdateTx(tx *Tx, update IncidentStatus) (IncidentStatus, error) {
 	now := time.Now().UTC()
 	var updated IncidentStatus
-	r := tx.Model(&IncidentStatus{}).
+	r := tx.g.Model(&IncidentStatus{}).
 		Clauses(clause.Returning{}).
 		Where("id = ? AND incident_id = ?", update.ID, update.IncidentID).
 		Updates(map[string]interface{}{
@@ -837,5 +837,5 @@ func (db *DB) ModifyEventUpdateTx(tx *gorm.DB, update IncidentStatus) (IncidentS
 }
 
 func (db *DB) ModifyEventUpdate(update IncidentStatus) (IncidentStatus, error) {
-	return db.ModifyEventUpdateTx(db.g, update)
+	return db.ModifyEventUpdateTx(&Tx{g: db.g}, update)
 }

@@ -11,7 +11,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	apiErrors "github.com/stackmon/otc-status-dashboard/internal/api/errors"
 	"github.com/stackmon/otc-status-dashboard/internal/api/rbac"
@@ -966,7 +965,7 @@ func validateEventCreationTimes(incData IncidentData) error {
 func createEvent(dbInst *db.DB, log *zap.Logger, inc *db.Incident, userID *string, pub *notification.Publisher) error {
 	log.Info("start to save an event to the database")
 
-	err := dbInst.WithTx(context.Background(), func(tx *gorm.DB) error {
+	err := dbInst.WithTx(context.Background(), func(tx *db.Tx) error {
 		id, err := dbInst.SaveIncidentTx(tx, inc)
 		if err != nil {
 			return err
@@ -1038,7 +1037,7 @@ func optionalPublisher(pub []*notification.Publisher) *notification.Publisher {
 // publishMaintenanceChange enqueues notification rows for a committed maintenance
 // change inside tx. It is a no-op for non-maintenance events or a disabled publisher.
 func publishMaintenanceChange(
-	ctx context.Context, tx *gorm.DB, pub *notification.Publisher,
+	ctx context.Context, tx *db.Tx, pub *notification.Publisher,
 	inc *db.Incident, oldStatus event.Status, userID *string,
 ) error {
 	if !pub.Enabled() || inc.Type != event.TypeMaintenance {
@@ -1071,7 +1070,7 @@ func persistIncidentPatch(
 	storedIncident *db.Incident, oldStatus event.Status, userID *string,
 ) bool {
 	statusChanged := storedIncident.Status != oldStatus
-	err := dbInst.WithTx(c.Request.Context(), func(tx *gorm.DB) error {
+	err := dbInst.WithTx(c.Request.Context(), func(tx *db.Tx) error {
 		if e := dbInst.ModifyIncidentTx(tx, storedIncident); e != nil {
 			return e
 		}

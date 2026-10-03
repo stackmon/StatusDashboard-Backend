@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 
 	"github.com/stackmon/otc-status-dashboard/internal/db"
 	"github.com/stackmon/otc-status-dashboard/internal/event"
@@ -123,7 +122,7 @@ func (ch *Checker) processMaintenance(mn *db.Incident, activeMaintenances *[]uin
 		mn.Status = actualStatus
 		// The modify + enqueue share one transaction: on a version conflict the
 		// whole thing rolls back and no notification is published.
-		txErr := ch.db.WithTx(context.Background(), func(tx *gorm.DB) error {
+		txErr := ch.db.WithTx(context.Background(), func(tx *db.Tx) error {
 			if modErr := ch.db.ModifyIncidentTx(tx, mn); modErr != nil {
 				return modErr
 			}

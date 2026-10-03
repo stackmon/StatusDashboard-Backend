@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 
 	"github.com/stackmon/otc-status-dashboard/internal/db"
 	"github.com/stackmon/otc-status-dashboard/internal/event"
@@ -19,7 +18,7 @@ func TestWithTx_CommitsIncidentAndOutboxAtomically(t *testing.T) {
 	d, g := newNotifDB(t)
 
 	var incID uint
-	err := d.WithTx(ctx, func(tx *gorm.DB) error {
+	err := d.WithTx(ctx, func(tx *db.Tx) error {
 		id, e := d.SaveIncidentTx(tx, newMaintenanceIncident())
 		if e != nil {
 			return e
@@ -43,7 +42,7 @@ func TestWithTx_RollsBackBothOnError(t *testing.T) {
 
 	var incID uint
 	var dedup string
-	err := d.WithTx(ctx, func(tx *gorm.DB) error {
+	err := d.WithTx(ctx, func(tx *db.Tx) error {
 		id, e := d.SaveIncidentTx(tx, newMaintenanceIncident())
 		if e != nil {
 			return e
@@ -75,7 +74,7 @@ func TestModifyIncidentTx_SharedTxWithEnqueue(t *testing.T) {
 	inc.Status = event.MaintenanceReviewed
 
 	row := newOutboxRow(incID, "creator@com.com")
-	err = d.WithTx(ctx, func(tx *gorm.DB) error {
+	err = d.WithTx(ctx, func(tx *db.Tx) error {
 		if e := d.ModifyIncidentTx(tx, inc); e != nil {
 			return e
 		}
@@ -100,8 +99,16 @@ func TestModifyEventUpdateTx_UpdatesText(t *testing.T) {
 	status := db.IncidentStatus{IncidentID: incID, Status: event.MaintenancePendingReview, Text: "original"}
 	require.NoError(t, g.Create(&status).Error)
 
-	updated, err := d.ModifyEventUpdateTx(g, db.IncidentStatus{
-		ID: status.ID, IncidentID: incID, Text: "patched",
+	var updated db.IncidentStatus
+	err := d.WithTx(context.Background(), func(tx *db.Tx) error {
+		u, e := d.ModifyEventUpdateTx(tx, db.IncidentStatus{
+			ID: status.ID, IncidentID: incID, Text: "patched",
+		})
+		if e != nil {
+			return e
+		}
+		updated = u
+		return nil
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "patched", updated.Text)

@@ -44,7 +44,7 @@ func (db *DB) rowExists(tx *gorm.DB, dedupKey string) (bool, error) {
 
 // Enqueue inserts one outbox row for a single recipient.
 // The row must be written in the same DB transaction as the business change.
-func (db *DB) Enqueue(ctx context.Context, tx *gorm.DB, row NotificationOutbox) error {
+func (db *DB) Enqueue(ctx context.Context, tx *Tx, row NotificationOutbox) error {
 	if row.DedupKey == "" {
 		return errors.New("notification: dedup_key is required")
 	}
@@ -65,7 +65,7 @@ func (db *DB) Enqueue(ctx context.Context, tx *gorm.DB, row NotificationOutbox) 
 // It must use `FOR UPDATE SKIP LOCKED` semantics and mark rows as processing,
 // increment attempts, and store lease metadata.
 func (db *DB) ClaimPending(
-	ctx context.Context, tx *gorm.DB, limit int, leaseOwner string, _ time.Duration,
+	ctx context.Context, tx *Tx, limit int, leaseOwner string, _ time.Duration,
 ) ([]NotificationOutbox, error) {
 	var rows []NotificationOutbox
 
@@ -98,7 +98,7 @@ func (db *DB) ClaimPending(
 }
 
 // MarkSent marks a row as sent and clears the active lease.
-func (db *DB) MarkSent(ctx context.Context, tx *gorm.DB, id uint) error {
+func (db *DB) MarkSent(ctx context.Context, tx *Tx, id uint) error {
 	return db.execWithTx(ctx, tx, func(gtx *gorm.DB) error {
 		res := gtx.Model(&NotificationOutbox{}).
 			Where("id = ?", id).Updates(map[string]any{
@@ -138,7 +138,7 @@ func (db *DB) getRowByID(tx *gorm.DB, id uint) (*NotificationOutbox, error) {
 // If retries remain, keep status='pending' and set next_attempt_at.
 // Otherwise set status='failed' and last_error.
 func (db *DB) MarkFailed(
-	ctx context.Context, tx *gorm.DB, id uint, errText string, maxAttempts int, backoff func(attempts int) time.Time,
+	ctx context.Context, tx *Tx, id uint, errText string, maxAttempts int, backoff func(attempts int) time.Time,
 ) error {
 	return db.execWithTx(ctx, tx, func(gtx *gorm.DB) error {
 		row, err := db.getRowByID(gtx, id)
@@ -166,7 +166,7 @@ func (db *DB) MarkFailed(
 
 // MarkFailedTerminal fails a row outright, ignoring the remaining attempts. Used for
 // rejections the server will repeat on every retry, such as an unknown recipient.
-func (db *DB) MarkFailedTerminal(ctx context.Context, tx *gorm.DB, id uint, errText string) error {
+func (db *DB) MarkFailedTerminal(ctx context.Context, tx *Tx, id uint, errText string) error {
 	return db.execWithTx(ctx, tx, func(gtx *gorm.DB) error {
 		res := gtx.Model(&NotificationOutbox{}).
 			Where("id = ?", id).Updates(map[string]any{
@@ -189,7 +189,7 @@ func (db *DB) MarkFailedTerminal(ctx context.Context, tx *gorm.DB, id uint, errT
 // RecoverStaleProcessing returns stale processing rows back to pending,
 // or marks them failed if they exhausted all attempts.
 func (db *DB) RecoverStaleProcessing(
-	ctx context.Context, tx *gorm.DB, leaseTimeout time.Duration, maxAttempts int,
+	ctx context.Context, tx *Tx, leaseTimeout time.Duration, maxAttempts int,
 ) ([]NotificationOutbox, error) {
 	var rows []NotificationOutbox
 
@@ -230,9 +230,9 @@ func (db *DB) RecoverStaleProcessing(
 }
 
 // execWithTx runs the callback in a transaction if tx is nil; otherwise it uses the provided tx.
-func (db *DB) execWithTx(ctx context.Context, tx *gorm.DB, fn func(*gorm.DB) error) error {
+func (db *DB) execWithTx(ctx context.Context, tx *Tx, fn func(*gorm.DB) error) error {
 	if tx != nil {
-		return fn(tx)
+		return fn(tx.g)
 	}
 
 	return db.g.WithContext(ctx).Transaction(func(gtx *gorm.DB) error {
