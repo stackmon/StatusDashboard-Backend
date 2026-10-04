@@ -838,7 +838,8 @@ func processComponentMovement(
 
 // processComponentInOpenedIncidents processes a single component against all opened incidents.
 func processComponentInOpenedIncidents(
-	ctx context.Context, dbInst *db.DB, log *zap.Logger, comp *db.Component, incIn *db.Incident, openedIncidents []*db.Incident,
+	ctx context.Context, dbInst *db.DB, log *zap.Logger,
+	comp *db.Component, incIn *db.Incident, openedIncidents []*db.Incident,
 ) (*ProcessComponentResp, error) {
 	compResult := &ProcessComponentResp{
 		ComponentID: int(comp.ID),
@@ -969,7 +970,10 @@ func validateEventCreationTimes(incData IncidentData) error {
 	return nil
 }
 
-func createEvent(ctx context.Context, dbInst *db.DB, log *zap.Logger, inc *db.Incident, userID *string, pub *notification.Publisher) error {
+func createEvent(
+	ctx context.Context, dbInst *db.DB, log *zap.Logger,
+	inc *db.Incident, userID *string, pub *notification.Publisher,
+) error {
 	log.Info("start to save an event to the database")
 
 	err := dbInst.WithTx(ctx, func(tx *db.Tx) error {

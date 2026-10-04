@@ -122,7 +122,9 @@ type feedParams struct {
 	componentName string
 }
 
-func getEvents(ctx context.Context, dbInstance *db.DB, log *zap.Logger, params feedParams, maxIncidents int) ([]*db.Incident, error) {
+func getEvents(
+	ctx context.Context, dbInstance *db.DB, log *zap.Logger, params feedParams, maxIncidents int,
+) ([]*db.Incident, error) {
 	var incidents []*db.Incident
 	var err error
 

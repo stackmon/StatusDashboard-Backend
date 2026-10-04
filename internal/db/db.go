@@ -185,7 +185,9 @@ func noPublicStatus() predicate.Incident {
 }
 
 // GetEventsWithCount retrieves events based on the provided parameters, with pagination and total count.
-func (db *DB) GetEventsWithCount(ctx context.Context, isAuth bool, params ...*IncidentsParams) ([]*Incident, int64, error) {
+func (db *DB) GetEventsWithCount(
+	ctx context.Context, isAuth bool, params ...*IncidentsParams,
+) ([]*Incident, int64, error) {
 	var param IncidentsParams
 	if len(params) > 0 && params[0] != nil {
 		param = *params[0]
@@ -526,7 +528,9 @@ func (db *DB) ReOpenIncident(ctx context.Context, inc *Incident) error {
 // Not affected to getActiveEventsForComponent (v2.go) because IsActive filter already contains
 // exceptions for "event.TypeMaintenance, event.MaintenancePendingReview, event.MaintenanceReviewed".
 // Supports optional filtering parameters: isActive, Types, LastCount.
-func (db *DB) GetEventsByComponentID(ctx context.Context, componentID uint, params ...*IncidentsParams) ([]*Incident, error) {
+func (db *DB) GetEventsByComponentID(
+	ctx context.Context, componentID uint, params ...*IncidentsParams,
+) ([]*Incident, error) {
 	var param IncidentsParams
 	if params != nil && params[0] != nil {
 		param = *params[0]
@@ -595,7 +599,9 @@ func (db *DB) GetEventsByComponentID(ctx context.Context, componentID uint, para
 	return incidents, nil
 }
 
-func (db *DB) GetIncidentsByComponentAttr(ctx context.Context, attr *ComponentAttr, params ...*IncidentsParams) ([]*Incident, error) {
+func (db *DB) GetIncidentsByComponentAttr(
+	ctx context.Context, attr *ComponentAttr, params ...*IncidentsParams,
+) ([]*Incident, error) {
 	// Get all public incidents for components with this attribute.
 	// Maintenance events in pending_review/reviewed status are excluded (require authentication).
 	var param IncidentsParams
