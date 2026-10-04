@@ -223,7 +223,7 @@ func TestV2PostEventsHandler(t *testing.T) {
 	assert.Len(t, oldIncident.Updates, 3)
 	t.Logf("STATUS updates: %v", oldIncident.Updates)
 	assert.Equal(t, event.IncidentDetected, oldIncident.Updates[0].Status)
-	assert.Equal(t, event.OutDatedSystem, oldIncident.Updates[1].Status)
+	assert.Equal(t, event.IncidentResolved, oldIncident.Updates[1].Status)
 	assert.Equal(t, event.IncidentResolved, oldIncident.Updates[2].Status)
 	assert.Equal(t, "The incident is detected.", oldIncident.Updates[0].Text)
 	assert.Equal(t, fmt.Sprintf("Cloud Container Engine (Container, EU-DE, cce) moved to <a href='/incidents/%d'>Test incident creation for api V2 for components: 1, 2. Test should close previous and move components to the new.</a>", result.Result[0].IncidentID), oldIncident.Updates[1].Text)
@@ -506,7 +506,7 @@ func TestV2PatchEventHandler(t *testing.T) {
 
 	inc = internalPatch(incID, &pData)
 	assert.Equal(t, startDate.Truncate(time.Microsecond), inc.StartDate)
-	assert.Equal(t, event.IncidentChanged, inc.Status)
+	assert.Equal(t, event.IncidentResolved, inc.Status, "changing dates on a closed incident keeps the resolved status")
 	require.NotNil(t, inc.EndDate)
 	assert.Equal(t, endDate.Truncate(time.Microsecond), inc.EndDate.Truncate(time.Microsecond))
 	assert.Nil(t, inc.Version, "Version must not be exposed for non-maintenance events")

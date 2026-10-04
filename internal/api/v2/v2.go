@@ -330,8 +330,12 @@ func toAPIEvent(inc *db.Incident, isAuth bool) *Incident {
 		components[i] = int(comp.ID)
 	}
 
+	updates, latestDescription := mapEventUpdates(inc.Statuses, isAuth, inc.Status, inc.EndDate, inc.Type)
+
 	var description string
-	if inc.Description != nil {
+	if latestDescription != "" {
+		description = latestDescription
+	} else if inc.Description != nil {
 		description = *inc.Description
 	}
 
@@ -343,8 +347,8 @@ func toAPIEvent(inc *db.Incident, isAuth bool) *Incident {
 		StartDate:   *inc.StartDate,
 		EndDate:     inc.EndDate,
 		System:      &inc.System,
-		Updates:     mapEventUpdates(inc.Statuses, isAuth),
-		Status:      inc.Status,
+		Updates:     updates,
+		Status:      eventStatus(inc),
 		Type:        inc.Type,
 	}
 
@@ -1848,23 +1852,103 @@ func PatchEventUpdateTextHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerF
 	}
 }
 
-func mapEventUpdates(statuses []db.IncidentStatus, isAuth bool) []EventUpdateData {
+// mapEventUpdates maps stored status rows to the API updates array. Rows with
+// status "description" are not status entries: they are dropped from the array
+// and the latest one is returned as the event description.
+// statusDescription marks an update row that carries a description change rather
+// than a status change; the API folds it into the event description field.
+const statusDescription event.Status = "description"
+
+func mapEventUpdates(
+	statuses []db.IncidentStatus, isAuth bool, eventStatus event.Status,
+	endDate *time.Time, eventType string,
+) ([]EventUpdateData, string) {
 	updates := make([]EventUpdateData, 0, len(statuses))
 	idx := 0
+	var latestDescription string
+	// "changed" and "impact changed" are not status changes: they collapse to the
+	// previous normalized status. Seeding that with the event status keeps a
+	// leading such row from collapsing to an empty value.
+	lastStatus := normalizeStatus(eventStatus, endDate, eventType)
 	for _, s := range statuses {
 		if !isAuth && isInternalStatus(s.Status) {
 			continue
 		}
+		if s.Status == statusDescription {
+			latestDescription = s.Text
+			continue
+		}
+		status := normalizeStatus(s.Status, endDate, eventType)
+		if status == event.IncidentChanged || status == event.IncidentImpactChanged {
+			status = lastStatus
+		}
+		lastStatus = status
 		updates = append(updates, EventUpdateData{
 			ID:        idx,
-			Status:    s.Status,
+			Status:    status,
 			Text:      s.Text,
 			Timestamp: s.Timestamp,
 		})
 		idx++
 	}
 
-	return updates
+	return updates, latestDescription
+}
+
+// eventStatus normalizes the stored event status. "changed" and "impact changed"
+// annotate a change rather than denote a state, so they are collapsed to the
+// previous status from the update history, matching the updates sequence. It
+// walks the full history, so unlike updates[] the result does not depend on the
+// caller's visibility.
+func eventStatus(inc *db.Incident) event.Status {
+	status := normalizeStatus(inc.Status, inc.EndDate, inc.Type)
+	if status != event.IncidentChanged && status != event.IncidentImpactChanged {
+		return status
+	}
+
+	prev := status
+	for _, s := range inc.Statuses {
+		if s.Status == statusDescription {
+			continue
+		}
+		row := normalizeStatus(s.Status, inc.EndDate, inc.Type)
+		if row == event.IncidentChanged || row == event.IncidentImpactChanged {
+			row = prev
+		}
+		prev = row
+	}
+
+	return prev
+}
+
+// normalizeStatus maps non-canonical status values stored in the database to
+// their canonical form. "changed" and "impact changed" are not status changes;
+// they are collapsed to the previous status by eventStatus and mapEventUpdates.
+// OutDatedSystem without an end date is kept verbatim: it has no canonical
+// terminal status, and consumers map it to the previous status.
+func normalizeStatus(raw event.Status, endDate *time.Time, eventType string) event.Status {
+	switch raw {
+	case "analyzing":
+		return event.IncidentAnalysing
+	case "in progress":
+		return event.MaintenanceInProgress
+	case "scheduled":
+		return event.MaintenancePlanned
+	case event.OutDatedSystem:
+		if endDate == nil {
+			return raw
+		}
+		switch eventType {
+		case event.TypeIncident:
+			return event.IncidentResolved
+		case event.TypeInformation:
+			return event.InfoCompleted
+		default:
+			return event.MaintenanceCompleted
+		}
+	default:
+		return raw
+	}
 }
 
 // isInternalStatus returns true for statuses that should not be exposed to public (non-authenticated) users.
