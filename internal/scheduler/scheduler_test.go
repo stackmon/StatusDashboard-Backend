@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -85,8 +86,9 @@ func TestScheduler_SkipsRoundWhenLockBusy(t *testing.T) {
 func TestScheduler_StopWaitsForInFlightTask(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
+	var once sync.Once
 	locker := &fakeLocker{fn: func(context.Context) error {
-		close(started)
+		once.Do(func() { close(started) })
 		<-release
 		return nil
 	}}
@@ -120,9 +122,9 @@ func TestScheduler_StopWaitsForInFlightTask(t *testing.T) {
 }
 
 func TestScheduler_KeepsRunningAfterTaskError(t *testing.T) {
-	var calls int
+	var calls atomic.Int64
 	locker := &fakeLocker{fn: func(context.Context) error {
-		calls++
+		calls.Add(1)
 		return errors.New("boom")
 	}}
 	s := New(locker, zap.NewNop())
@@ -132,11 +134,11 @@ func TestScheduler_KeepsRunningAfterTaskError(t *testing.T) {
 	s.Run(ctx)
 
 	deadline := time.Now().Add(2 * time.Second)
-	for calls < 2 && time.Now().Before(deadline) {
+	for calls.Load() < 2 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	cancel()
 	s.Stop(context.Background())
 
-	assert.GreaterOrEqual(t, calls, 2, "a failing task must not stop the schedule")
+	assert.GreaterOrEqual(t, calls.Load(), int64(2), "a failing task must not stop the schedule")
 }

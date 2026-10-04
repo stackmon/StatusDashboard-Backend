@@ -26,6 +26,10 @@ func New(database *db.DB, log *zap.Logger, notifier *notification.Publisher) *Ch
 // Check runs one full scan. It is the body of the scheduler's scan task,
 // which holds the advisory lock for the whole round.
 func (ch *Checker) Check(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+
 	var wg sync.WaitGroup
 
 	wg.Add(1)
