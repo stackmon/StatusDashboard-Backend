@@ -348,7 +348,7 @@ func toAPIEvent(inc *db.Incident, isAuth bool) *Incident {
 		EndDate:     inc.EndDate,
 		System:      &inc.System,
 		Updates:     updates,
-		Status:      normalizeStatus(inc.Status, inc.EndDate, inc.Type),
+		Status:      eventStatus(inc),
 		Type:        inc.Type,
 	}
 
@@ -1895,10 +1895,35 @@ func mapEventUpdates(
 	return updates, latestDescription
 }
 
+// eventStatus normalizes the stored event status. "changed" and "impact changed"
+// annotate a change rather than denote a state, so they are collapsed to the
+// previous status from the update history, matching the updates sequence.
+func eventStatus(inc *db.Incident) event.Status {
+	status := normalizeStatus(inc.Status, inc.EndDate, inc.Type)
+	if status != event.IncidentChanged && status != event.IncidentImpactChanged {
+		return status
+	}
+
+	prev := status
+	for _, s := range inc.Statuses {
+		if s.Status == statusDescription {
+			continue
+		}
+		row := normalizeStatus(s.Status, inc.EndDate, inc.Type)
+		if row == event.IncidentChanged || row == event.IncidentImpactChanged {
+			row = prev
+		}
+		prev = row
+	}
+
+	return prev
+}
+
 // normalizeStatus maps non-canonical status values stored in the database to
 // their canonical form. "changed" and "impact changed" are not status changes;
-// they are passed through and collapsed to the previous status in the updates
-// sequence so the history shows no spurious jump.
+// they are collapsed to the previous status by eventStatus and mapEventUpdates.
+// OutDatedSystem without an end date is kept verbatim: it has no canonical
+// terminal status, and consumers map it to the previous status.
 func normalizeStatus(raw event.Status, endDate *time.Time, eventType string) event.Status {
 	switch raw {
 	case "analyzing":

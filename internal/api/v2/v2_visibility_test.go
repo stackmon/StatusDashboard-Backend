@@ -87,6 +87,81 @@ func TestMapEventUpdates_NormalizesStatuses(t *testing.T) {
 	assert.Equal(t, "analysing", string(updates[0].Status))
 	assert.Equal(t, "in_progress", string(updates[1].Status))
 	assert.Equal(t, "planned", string(updates[2].Status))
+
+	systemStatuses := []db.IncidentStatus{
+		{ID: 1, Status: event.OutDatedSystem, Text: "Moved", Timestamp: testTime},
+	}
+	systemUpdates, _ := mapEventUpdates(systemStatuses, true, event.MaintenancePlanned, &endDate, event.TypeMaintenance)
+	assert.Equal(t, event.MaintenanceCompleted, systemUpdates[0].Status)
+}
+
+func TestEventStatus(t *testing.T) {
+	testTime := time.Now().UTC()
+	endDate := testTime.Add(time.Hour)
+	past := testTime.Add(-time.Hour)
+
+	t.Run("changed on a closed incident collapses to the previous status", func(t *testing.T) {
+		inc := &db.Incident{
+			Type:    event.TypeIncident,
+			Status:  event.IncidentChanged,
+			EndDate: &endDate,
+			Statuses: []db.IncidentStatus{
+				{Status: event.IncidentDetected, Timestamp: past},
+				{Status: event.IncidentResolved, Timestamp: past},
+			},
+		}
+		assert.Equal(t, event.IncidentResolved, eventStatus(inc))
+	})
+
+	t.Run("impact changed on an open incident collapses to the previous status", func(t *testing.T) {
+		inc := &db.Incident{
+			Type:   event.TypeIncident,
+			Status: event.IncidentImpactChanged,
+			Statuses: []db.IncidentStatus{
+				{Status: event.IncidentDetected, Timestamp: past},
+				{Status: event.IncidentAnalysing, Timestamp: past},
+			},
+		}
+		assert.Equal(t, event.IncidentAnalysing, eventStatus(inc))
+	})
+
+	t.Run("a plain status is returned normalized", func(t *testing.T) {
+		inc := &db.Incident{
+			Type:     event.TypeIncident,
+			Status:   "analyzing",
+			Statuses: []db.IncidentStatus{{Status: "analyzing", Timestamp: past}},
+		}
+		assert.Equal(t, event.IncidentAnalysing, eventStatus(inc))
+	})
+
+	t.Run("SYSTEM without an end date is kept verbatim", func(t *testing.T) {
+		inc := &db.Incident{
+			Type:     event.TypeIncident,
+			Status:   event.OutDatedSystem,
+			Statuses: []db.IncidentStatus{{Status: event.OutDatedSystem, Timestamp: past}},
+		}
+		assert.Equal(t, event.OutDatedSystem, eventStatus(inc))
+	})
+}
+
+func TestEventStatus_MatchesLastUpdate(t *testing.T) {
+	testTime := time.Now().UTC()
+	endDate := testTime.Add(time.Hour)
+
+	statuses := []db.IncidentStatus{
+		{Status: event.IncidentDetected, Text: "detected", Timestamp: testTime},
+		{Status: event.IncidentResolved, Text: "resolved", Timestamp: testTime},
+		{Status: event.IncidentChanged, Text: "changed", Timestamp: testTime},
+	}
+	inc := &db.Incident{
+		Type:     event.TypeIncident,
+		Status:   event.IncidentChanged,
+		EndDate:  &endDate,
+		Statuses: statuses,
+	}
+
+	updates, _ := mapEventUpdates(statuses, true, inc.Status, inc.EndDate, inc.Type)
+	assert.Equal(t, eventStatus(inc), updates[len(updates)-1].Status)
 }
 
 func TestMapEventUpdates_ChangedStatusesKeepPrevious(t *testing.T) {
