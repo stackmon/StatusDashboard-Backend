@@ -16,6 +16,9 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/conf"
 )
 
+// shutdownTimeout bounds the in-flight request drain after SIGTERM.
+const shutdownTimeout = 15 * time.Second
+
 func main() {
 	c, err := conf.LoadConf()
 	if err != nil {
@@ -53,7 +56,7 @@ func main() {
 
 	// The signal context is already cancelled, so the shutdown needs its own
 	// deadline to drain in-flight requests.
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
 	if err = s.Shutdown(shutdownCtx); err != nil {
