@@ -196,7 +196,7 @@ func GetIncidentsHandler(dbInst *db.DB, logger *zap.Logger, svc *rbac.Service) g
 		isAuth := hasExtendedView(c, svc)
 
 		logger.Debug("retrieve incidents with params", zap.Any("params", params))
-		r, err := dbInst.GetEvents(isAuth, params)
+		r, err := dbInst.GetEvents(c.Request.Context(), isAuth, params)
 		if err != nil {
 			logger.Error("failed to retrieve incidents", zap.Error(err))
 			apiErrors.RaiseInternalErr(c, err)
@@ -235,7 +235,7 @@ func GetEventsHandler(dbInst *db.DB, logger *zap.Logger, svc *rbac.Service) gin.
 		isAuth := hasExtendedView(c, svc)
 
 		logger.Debug("retrieve events with params", zap.Any("params", params))
-		r, total, err := dbInst.GetEventsWithCount(isAuth, params)
+		r, total, err := dbInst.GetEventsWithCount(c.Request.Context(), isAuth, params)
 		if err != nil {
 			logger.Error("failed to retrieve incidents", zap.Error(err))
 			apiErrors.RaiseInternalErr(c, err)
@@ -296,7 +296,7 @@ func GetIncidentHandler(dbInst *db.DB, logger *zap.Logger, svc *rbac.Service) gi
 			return
 		}
 
-		r, err := dbInst.GetIncident(incID.ID)
+		r, err := dbInst.GetIncident(c.Request.Context(), incID.ID)
 		if err != nil {
 			if errors.Is(err, db.ErrDBIncidentDSNotExist) {
 				apiErrors.RaiseStatusNotFoundErr(c, apiErrors.ErrIncidentDSNotExist)
@@ -418,17 +418,18 @@ func PostIncidentHandler(dbInst *db.DB, logger *zap.Logger, pub ...*notification
 func routeIncidentCreation(
 	c *gin.Context, dbInst *db.DB, log *zap.Logger, incData IncidentData, pub *notification.Publisher,
 ) ([]*ProcessComponentResp, error) {
+	ctx := c.Request.Context()
 	if *incData.System {
 		log.Info("system incident detected, using system incident creation logic")
-		return handleSystemIncidentCreation(dbInst, log, incData, pub)
+		return handleSystemIncidentCreation(ctx, dbInst, log, incData, pub)
 	}
 	log.Info("regular incident detected, using regular incident creation logic")
 	userID := getUserIDFromContext(c)
-	return handleRegularIncidentCreation(dbInst, log, incData, userID, pub)
+	return handleRegularIncidentCreation(ctx, dbInst, log, incData, userID, pub)
 }
 
 func handleSystemIncidentCreation(
-	dbInst *db.DB, log *zap.Logger, incData IncidentData, _ *notification.Publisher,
+	ctx context.Context, dbInst *db.DB, log *zap.Logger, incData IncidentData, _ *notification.Publisher,
 ) ([]*ProcessComponentResp, error) {
 	if incData.Type != event.TypeIncident {
 		log.Info("system incident must be of type 'incident'")
@@ -439,14 +440,14 @@ func handleSystemIncidentCreation(
 		incData.Description = "System-wide incident affecting multiple components. Created automatically."
 	}
 
-	components, err := fetchComponents(dbInst, incData.Components)
+	components, err := fetchComponents(ctx, dbInst, incData.Components)
 	if err != nil {
 		return nil, err
 	}
 
 	result := make([]*ProcessComponentResp, 0, len(components))
 	for _, comp := range components {
-		compResult, errProc := processSystemIncidentComponent(dbInst, log, comp, incData)
+		compResult, errProc := processSystemIncidentComponent(ctx, dbInst, log, comp, incData)
 		if errProc != nil {
 			return nil, errProc
 		}
@@ -456,10 +457,10 @@ func handleSystemIncidentCreation(
 	return result, nil
 }
 
-func fetchComponents(dbInst *db.DB, componentIDs []int) ([]db.Component, error) {
+func fetchComponents(ctx context.Context, dbInst *db.DB, componentIDs []int) ([]db.Component, error) {
 	components := make([]db.Component, len(componentIDs))
 	for i, compID := range componentIDs {
-		component, err := dbInst.GetComponent(compID)
+		component, err := dbInst.GetComponent(ctx, compID)
 		if err != nil {
 			return nil, err
 		}
@@ -469,38 +470,38 @@ func fetchComponents(dbInst *db.DB, componentIDs []int) ([]db.Component, error) 
 }
 
 func processSystemIncidentComponent(
-	dbInst *db.DB, log *zap.Logger, comp db.Component, incData IncidentData,
+	ctx context.Context, dbInst *db.DB, log *zap.Logger, comp db.Component, incData IncidentData,
 ) (*ProcessComponentResp, error) {
 	log.Info("start to process component", zap.Any("component", comp))
 	log.Info("find events with target component", zap.Uint("componentID", comp.ID))
 
-	events, err := getActiveEventsForComponent(dbInst, comp.ID)
+	events, err := getActiveEventsForComponent(ctx, dbInst, comp.ID)
 	if err != nil {
 		return nil, err
 	}
 	log.Info("found events for component", zap.Uint("componentID", comp.ID), zap.Int("eventsCount", len(events)))
 
 	if len(events) == 0 {
-		return handleComponentWithNoEvents(dbInst, log, &comp, incData)
+		return handleComponentWithNoEvents(ctx, dbInst, log, &comp, incData)
 	}
 
-	return handleComponentWithExistingEvents(dbInst, log, &comp, incData, events)
+	return handleComponentWithExistingEvents(ctx, dbInst, log, &comp, incData, events)
 }
 
-func getActiveEventsForComponent(dbInst *db.DB, componentID uint) ([]*db.Incident, error) {
+func getActiveEventsForComponent(ctx context.Context, dbInst *db.DB, componentID uint) ([]*db.Incident, error) {
 	active := true
 	params := &db.IncidentsParams{
 		IsActive: &active,
 		Types:    []string{event.TypeIncident, event.TypeMaintenance},
 	}
-	return dbInst.GetEventsByComponentID(componentID, params)
+	return dbInst.GetEventsByComponentID(ctx, componentID, params)
 }
 
 func handleComponentWithNoEvents(
-	dbInst *db.DB, log *zap.Logger, comp *db.Component, incData IncidentData,
+	ctx context.Context, dbInst *db.DB, log *zap.Logger, comp *db.Component, incData IncidentData,
 ) (*ProcessComponentResp, error) {
 	log.Info("no events found for component, check and process all system incidents", zap.Uint("componentID", comp.ID))
-	sysInc, err := addComponentToSystemIncident(dbInst, log, comp, incData)
+	sysInc, err := addComponentToSystemIncident(ctx, dbInst, log, comp, incData)
 	if err != nil {
 		return nil, err
 	}
@@ -515,7 +516,7 @@ func handleComponentWithNoEvents(
 }
 
 func handleComponentWithExistingEvents(
-	dbInst *db.DB, log *zap.Logger, comp *db.Component, incData IncidentData, events []*db.Incident,
+	ctx context.Context, dbInst *db.DB, log *zap.Logger, comp *db.Component, incData IncidentData, events []*db.Incident,
 ) (*ProcessComponentResp, error) {
 	log.Info("checking events for the component", zap.Uint("componentID", comp.ID), zap.Int("eventsCount", len(events)))
 
@@ -554,7 +555,7 @@ func handleComponentWithExistingEvents(
 
 	// If we found a system incident, handle it
 	if firstSystemIncident != nil {
-		return handleSystemIncidentWithImpactComparison(dbInst, log, comp, incData, firstSystemIncident)
+		return handleSystemIncidentWithImpactComparison(ctx, dbInst, log, comp, incData, firstSystemIncident)
 	}
 
 	// This should not be reached - if we have events, one of the conditions above should handle it
@@ -563,7 +564,7 @@ func handleComponentWithExistingEvents(
 }
 
 func handleSystemIncidentWithImpactComparison(
-	dbInst *db.DB, log *zap.Logger, comp *db.Component, incData IncidentData, evnt *db.Incident,
+	ctx context.Context, dbInst *db.DB, log *zap.Logger, comp *db.Component, incData IncidentData, evnt *db.Incident,
 ) (*ProcessComponentResp, error) {
 	log.Info(
 		"found system incident for the component, compare impact",
@@ -587,7 +588,7 @@ func handleSystemIncidentWithImpactComparison(
 		zap.Uint("componentID", comp.ID), zap.Uint("fromIncidentID", evnt.ID),
 	)
 
-	sysInc, err := moveComponentFromToSystemIncidents(dbInst, log, comp, incData, evnt)
+	sysInc, err := moveComponentFromToSystemIncidents(ctx, dbInst, log, comp, incData, evnt)
 	if err != nil {
 		return nil, err
 	}
@@ -602,7 +603,7 @@ func handleSystemIncidentWithImpactComparison(
 }
 
 func addComponentToSystemIncident(
-	dbInst *db.DB, log *zap.Logger, comp *db.Component, incData IncidentData,
+	ctx context.Context, dbInst *db.DB, log *zap.Logger, comp *db.Component, incData IncidentData,
 ) (*db.Incident, error) {
 	system := true
 	active := true
@@ -612,7 +613,7 @@ func addComponentToSystemIncident(
 		IsSystem: &system,
 		IsActive: &active,
 	}
-	sysIncidents, errEvents := dbInst.GetEventsInternal(params)
+	sysIncidents, errEvents := dbInst.GetEventsInternal(ctx, params)
 	if errEvents != nil {
 		return nil, errEvents
 	}
@@ -632,7 +633,7 @@ func addComponentToSystemIncident(
 				Text:       fmt.Sprintf("%s added to the incident by system.", comp.PrintAttrs()),
 				Timestamp:  time.Now().UTC(),
 			}
-			err := dbInst.AddComponentToIncident(sysInc, comp, status)
+			err := dbInst.AddComponentToIncident(ctx, sysInc, comp, status)
 			if err != nil {
 				return nil, err
 			}
@@ -657,7 +658,7 @@ func addComponentToSystemIncident(
 		Components:  []db.Component{*comp},
 	}
 
-	if err := createEvent(dbInst, log, &incIn, nil, nil); err != nil {
+	if err := createEvent(ctx, dbInst, log, &incIn, nil, nil); err != nil {
 		return nil, err
 	}
 
@@ -665,7 +666,7 @@ func addComponentToSystemIncident(
 }
 
 func moveComponentFromToSystemIncidents(
-	dbInst *db.DB, log *zap.Logger, comp *db.Component, incData IncidentData, oldInc *db.Incident,
+	ctx context.Context, dbInst *db.DB, log *zap.Logger, comp *db.Component, incData IncidentData, oldInc *db.Incident,
 ) (*db.Incident, error) {
 	system := true
 	active := true
@@ -675,7 +676,7 @@ func moveComponentFromToSystemIncidents(
 		IsSystem: &system,
 		IsActive: &active,
 	}
-	sysIncidents, errEvents := dbInst.GetEventsInternal(params)
+	sysIncidents, errEvents := dbInst.GetEventsInternal(ctx, params)
 	if errEvents != nil {
 		return nil, errEvents
 	}
@@ -694,7 +695,7 @@ func moveComponentFromToSystemIncidents(
 				closeOld = true
 			}
 
-			inc, err := dbInst.MoveComponentFromOldToAnotherIncident(comp, oldInc, sysInc, closeOld)
+			inc, err := dbInst.MoveComponentFromOldToAnotherIncident(ctx, comp, oldInc, sysInc, closeOld)
 			if err != nil {
 				return nil, err
 			}
@@ -712,7 +713,7 @@ func moveComponentFromToSystemIncidents(
 			"the source incident has only 1 target component with the lower impact, we can just update its impact",
 			zap.Uint("componentID", comp.ID), zap.Uint("incidentID", oldInc.ID),
 		)
-		inc, err := dbInst.IncreaseIncidentImpact(oldInc, *incData.Impact)
+		inc, err := dbInst.IncreaseIncidentImpact(ctx, oldInc, *incData.Impact)
 		if err != nil {
 			return nil, err
 		}
@@ -726,6 +727,7 @@ func moveComponentFromToSystemIncidents(
 	)
 
 	inc, err := dbInst.ExtractComponentsToNewIncident(
+		ctx,
 		[]db.Component{*comp},
 		oldInc,
 		*incData.Impact,
@@ -738,7 +740,7 @@ func moveComponentFromToSystemIncidents(
 
 	// Update the new incident to mark it as a system incident
 	inc.System = true
-	if err = dbInst.ModifyIncident(inc); err != nil {
+	if err = dbInst.ModifyIncident(ctx, inc); err != nil {
 		return nil, err
 	}
 
@@ -746,7 +748,7 @@ func moveComponentFromToSystemIncidents(
 }
 
 func handleRegularIncidentCreation(
-	dbInst *db.DB, log *zap.Logger, incData IncidentData, userID *string, pub *notification.Publisher,
+	ctx context.Context, dbInst *db.DB, log *zap.Logger, incData IncidentData, userID *string, pub *notification.Publisher,
 ) ([]*ProcessComponentResp, error) {
 	components := make([]db.Component, len(incData.Components))
 	for i, comp := range incData.Components {
@@ -776,14 +778,14 @@ func handleRegularIncidentCreation(
 
 	log.Info("get active events from the database")
 	isActive := true
-	openedIncidents, err := dbInst.GetEventsInternal(&db.IncidentsParams{IsActive: &isActive})
+	openedIncidents, err := dbInst.GetEventsInternal(ctx, &db.IncidentsParams{IsActive: &isActive})
 	if err != nil {
 		return nil, err
 	}
 
 	log.Info("opened incidents and maintenances retrieved", zap.Any("openedIncidents", openedIncidents))
 
-	if err = createEvent(dbInst, log, &incIn, userID, pub); err != nil {
+	if err = createEvent(ctx, dbInst, log, &incIn, userID, pub); err != nil {
 		return nil, err
 	}
 
@@ -793,7 +795,7 @@ func handleRegularIncidentCreation(
 	}
 
 	// Process component movement for complex cases
-	return processComponentMovement(dbInst, log, &incIn, openedIncidents)
+	return processComponentMovement(ctx, dbInst, log, &incIn, openedIncidents)
 }
 
 func shouldSkipComponentMovement(openedIncidents []*db.Incident, incData IncidentData) bool {
@@ -818,13 +820,13 @@ func createSimpleIncidentResult(log *zap.Logger, incIn *db.Incident, incData Inc
 }
 
 func processComponentMovement(
-	dbInst *db.DB, log *zap.Logger, incIn *db.Incident, openedIncidents []*db.Incident,
+	ctx context.Context, dbInst *db.DB, log *zap.Logger, incIn *db.Incident, openedIncidents []*db.Incident,
 ) ([]*ProcessComponentResp, error) {
 	log.Info("start to analyse component movement")
 	result := make([]*ProcessComponentResp, 0, len(incIn.Components))
 
 	for _, comp := range incIn.Components {
-		compResult, err := processComponentInOpenedIncidents(dbInst, log, &comp, incIn, openedIncidents)
+		compResult, err := processComponentInOpenedIncidents(ctx, dbInst, log, &comp, incIn, openedIncidents)
 		if err != nil {
 			return nil, err
 		}
@@ -836,7 +838,7 @@ func processComponentMovement(
 
 // processComponentInOpenedIncidents processes a single component against all opened incidents.
 func processComponentInOpenedIncidents(
-	dbInst *db.DB, log *zap.Logger, comp *db.Component, incIn *db.Incident, openedIncidents []*db.Incident,
+	ctx context.Context, dbInst *db.DB, log *zap.Logger, comp *db.Component, incIn *db.Incident, openedIncidents []*db.Incident,
 ) (*ProcessComponentResp, error) {
 	compResult := &ProcessComponentResp{
 		ComponentID: int(comp.ID),
@@ -851,7 +853,7 @@ func processComponentInOpenedIncidents(
 			continue
 		}
 
-		moved, err := tryMoveComponentIfFound(dbInst, log, comp, inc, incIn, compResult)
+		moved, err := tryMoveComponentIfFound(ctx, dbInst, log, comp, inc, incIn, compResult)
 		if err != nil {
 			return nil, err
 		}
@@ -875,6 +877,7 @@ func shouldSkipIncident(inc *db.Incident) bool {
 
 // tryMoveComponentIfFound attempts to move a component if it's found in the given incident.
 func tryMoveComponentIfFound(
+	ctx context.Context,
 	dbInst *db.DB,
 	log *zap.Logger,
 	comp *db.Component,
@@ -887,7 +890,7 @@ func tryMoveComponentIfFound(
 			log.Info("found the component in the opened incident", zap.Any("component", comp), zap.Any("incident", inc))
 
 			closeInc := len(inc.Components) == 1
-			incident, err := dbInst.MoveComponentFromOldToAnotherIncident(comp, inc, incIn, closeInc)
+			incident, err := dbInst.MoveComponentFromOldToAnotherIncident(ctx, comp, inc, incIn, closeInc)
 			if err != nil {
 				return false, err
 			}
@@ -966,11 +969,11 @@ func validateEventCreationTimes(incData IncidentData) error {
 	return nil
 }
 
-func createEvent(dbInst *db.DB, log *zap.Logger, inc *db.Incident, userID *string, pub *notification.Publisher) error {
+func createEvent(ctx context.Context, dbInst *db.DB, log *zap.Logger, inc *db.Incident, userID *string, pub *notification.Publisher) error {
 	log.Info("start to save an event to the database")
 
-	err := dbInst.WithTx(context.Background(), func(tx *db.Tx) error {
-		id, err := dbInst.SaveIncidentTx(tx, inc)
+	err := dbInst.WithTx(ctx, func(tx *db.Tx) error {
+		id, err := dbInst.SaveIncidentTx(ctx, tx, inc)
 		if err != nil {
 			return err
 		}
@@ -1017,12 +1020,12 @@ func createEvent(dbInst *db.DB, log *zap.Logger, inc *db.Incident, userID *strin
 		})
 		inc.Status = status
 
-		if err = dbInst.ModifyIncidentTx(tx, inc); err != nil {
+		if err = dbInst.ModifyIncidentTx(ctx, tx, inc); err != nil {
 			return err
 		}
 
 		// A newly created maintenance has no previous status.
-		return publishMaintenanceChange(context.Background(), tx, pub, inc, "", userID)
+		return publishMaintenanceChange(ctx, tx, pub, inc, "", userID)
 	})
 	if err == nil && inc.Type == event.TypeMaintenance {
 		pub.Notify() // wake the worker after the commit
@@ -1075,7 +1078,7 @@ func persistIncidentPatch(
 ) bool {
 	statusChanged := storedIncident.Status != oldStatus
 	err := dbInst.WithTx(c.Request.Context(), func(tx *db.Tx) error {
-		if e := dbInst.ModifyIncidentTx(tx, storedIncident); e != nil {
+		if e := dbInst.ModifyIncidentTx(c.Request.Context(), tx, storedIncident); e != nil {
 			return e
 		}
 		if !statusChanged {
@@ -1182,7 +1185,7 @@ func PatchIncidentHandler(dbInst *db.DB, logger *zap.Logger, pub ...*notificatio
 			return
 		}
 
-		inc, errDB := dbInst.GetIncident(int(storedIncident.ID))
+		inc, errDB := dbInst.GetIncident(c.Request.Context(), int(storedIncident.ID))
 		if errDB != nil {
 			logger.Error("incident patch: failed to retrieve updated event",
 				zap.Uint("event_id", storedIncident.ID), zap.Error(errDB))
@@ -1204,7 +1207,7 @@ func reopenIncident(
 	logger.Info("reopening incident",
 		zap.Uint("event_id", storedIncident.ID),
 	)
-	err := dbInst.ReOpenIncident(storedIncident)
+	err := dbInst.ReOpenIncident(c.Request.Context(), storedIncident)
 	if err != nil {
 		logger.Error("incident reopen failed: database error",
 			zap.Uint("event_id", storedIncident.ID), zap.Error(err))
@@ -1411,6 +1414,7 @@ func PostIncidentExtractHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerFu
 		}
 
 		inc, err := dbInst.ExtractComponentsToNewIncident(
+			c.Request.Context(),
 			movedComponents,
 			storedInc,
 			*storedInc.Impact,
@@ -1469,7 +1473,7 @@ func GetComponentsHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		logger.Debug("retrieve components")
 
-		r, err := dbInst.GetComponentsWithValues()
+		r, err := dbInst.GetComponentsWithValues(c.Request.Context())
 		if err != nil {
 			apiErrors.RaiseInternalErr(c, err)
 			return
@@ -1489,7 +1493,7 @@ func GetComponentHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 			return
 		}
 
-		r, err := dbInst.GetComponent(compID.ID)
+		r, err := dbInst.GetComponent(c.Request.Context(), compID.ID)
 		if err != nil {
 			if errors.Is(err, db.ErrDBComponentDSNotExist) {
 				apiErrors.RaiseStatusNotFoundErr(c, apiErrors.ErrComponentDSNotExist)
@@ -1536,7 +1540,7 @@ func PostComponentHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 			Attrs: attrs,
 		}
 
-		componentID, err := dbInst.SaveComponent(compDB)
+		componentID, err := dbInst.SaveComponent(c.Request.Context(), compDB)
 		if err != nil {
 			if errors.Is(err, db.ErrDBComponentExists) {
 				apiErrors.RaiseBadRequestErr(c, apiErrors.ErrComponentExist)
@@ -1592,7 +1596,7 @@ func GetComponentsAvailabilityHandler(dbInst *db.DB, logger *zap.Logger) gin.Han
 	return func(c *gin.Context) {
 		logger.Debug("retrieve availability of components")
 
-		components, err := dbInst.GetComponentsWithIncidents()
+		components, err := dbInst.GetComponentsWithIncidents(c.Request.Context())
 		if err != nil {
 			apiErrors.RaiseInternalErr(c, err)
 			return
@@ -1821,7 +1825,7 @@ func PatchEventUpdateTextHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerF
 		}
 
 		// Update existence check.
-		updates, err := dbInst.GetEventUpdates(uint(incID))
+		updates, err := dbInst.GetEventUpdates(c.Request.Context(), uint(incID))
 		if err != nil {
 			apiErrors.RaiseInternalErr(c, err)
 			return
@@ -1836,7 +1840,7 @@ func PatchEventUpdateTextHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerF
 		targetUPD.Text = text
 		targetUPD.ModifiedBy = getUserIDFromContext(c)
 
-		updated, err := dbInst.ModifyEventUpdate(targetUPD)
+		updated, err := dbInst.ModifyEventUpdate(c.Request.Context(), targetUPD)
 
 		if err != nil {
 			apiErrors.RaiseInternalErr(c, err)

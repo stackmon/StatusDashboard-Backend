@@ -35,7 +35,7 @@ func seedIncident(t *testing.T, d *db.DB) uint {
 	text := "notif-test maintenance"
 	start := time.Now().UTC()
 	impact := 0
-	id, err := d.SaveIncident(&db.Incident{
+	id, err := d.SaveIncident(context.Background(), &db.Incident{
 		Text:      &text,
 		StartDate: &start,
 		Impact:    &impact,

@@ -185,13 +185,11 @@ func noPublicStatus() predicate.Incident {
 }
 
 // GetEventsWithCount retrieves events based on the provided parameters, with pagination and total count.
-func (db *DB) GetEventsWithCount(isAuth bool, params ...*IncidentsParams) ([]*Incident, int64, error) {
+func (db *DB) GetEventsWithCount(ctx context.Context, isAuth bool, params ...*IncidentsParams) ([]*Incident, int64, error) {
 	var param IncidentsParams
 	if len(params) > 0 && params[0] != nil {
 		param = *params[0]
 	}
-
-	ctx := context.Background()
 
 	preds, err := applyEventsFilters(&param, isAuth)
 	if err != nil {
@@ -244,19 +242,17 @@ func (db *DB) GetEventsWithCount(isAuth bool, params ...*IncidentsParams) ([]*In
 
 // GetEvents retrieves events based on the provided parameters.
 // This is a wrapper around GetEventsWithCount for backward compatibility.
-func (db *DB) GetEvents(isAuth bool, params ...*IncidentsParams) ([]*Incident, error) {
-	events, _, err := db.GetEventsWithCount(isAuth, params...)
+func (db *DB) GetEvents(ctx context.Context, isAuth bool, params ...*IncidentsParams) ([]*Incident, error) {
+	events, _, err := db.GetEventsWithCount(ctx, isAuth, params...)
 	return events, err
 }
 
 // GetEventsInternal retrieves all events for internal use (no filtering by auth).
-func (db *DB) GetEventsInternal(params ...*IncidentsParams) ([]*Incident, error) {
-	return db.GetEvents(AuthorizedAccess, params...)
+func (db *DB) GetEventsInternal(ctx context.Context, params ...*IncidentsParams) ([]*Incident, error) {
+	return db.GetEvents(ctx, AuthorizedAccess, params...)
 }
 
-func (db *DB) GetIncident(id int) (*Incident, error) {
-	ctx := context.Background()
-
+func (db *DB) GetIncident(ctx context.Context, id int) (*Incident, error) {
 	e, err := db.e.Incident.Query().
 		Where(incident.IDEQ(id)).
 		WithComponents(func(q *ent.ComponentQuery) {
@@ -297,12 +293,11 @@ func (db *DB) WithTx(ctx context.Context, fn func(tx *Tx) error) error {
 }
 
 // SaveIncidentTx creates an incident using the provided transaction.
-func (db *DB) SaveIncidentTx(tx *Tx, inc *Incident) (uint, error) {
+func (db *DB) SaveIncidentTx(ctx context.Context, tx *Tx, inc *Incident) (uint, error) {
 	if inc.Text == nil || *inc.Text == "" {
 		return 0, ErrIncidentTextRequired
 	}
 
-	ctx := context.Background()
 	c := db.clientFor(tx)
 
 	now := time.Now().UTC()
@@ -379,19 +374,19 @@ func (db *DB) SaveIncidentTx(tx *Tx, inc *Incident) (uint, error) {
 	return inc.ID, nil
 }
 
-func (db *DB) SaveIncident(inc *Incident) (uint, error) {
-	return db.SaveIncidentTx(nil, inc)
+func (db *DB) SaveIncident(ctx context.Context, inc *Incident) (uint, error) {
+	return db.SaveIncidentTx(ctx, nil, inc)
 }
 
 // ModifyIncidentTx applies a modification (with maintenance optimistic locking and
 // new status inserts) using the provided transaction.
-func (db *DB) ModifyIncidentTx(tx *Tx, inc *Incident) error {
-	return db.modifyIncident(context.Background(), db.clientFor(tx), inc)
+func (db *DB) ModifyIncidentTx(ctx context.Context, tx *Tx, inc *Incident) error {
+	return db.modifyIncident(ctx, db.clientFor(tx), inc)
 }
 
-func (db *DB) ModifyIncident(inc *Incident) error {
-	return db.execWithTx(context.Background(), nil, func(client *ent.Client, _ entsql.ExecQuerier) error {
-		return db.modifyIncident(context.Background(), client, inc)
+func (db *DB) ModifyIncident(ctx context.Context, inc *Incident) error {
+	return db.execWithTx(ctx, nil, func(client *ent.Client, _ entsql.ExecQuerier) error {
+		return db.modifyIncident(ctx, client, inc)
 	})
 }
 
@@ -475,14 +470,13 @@ func applyIncidentPatch(update *ent.IncidentUpdate, inc *Incident) {
 }
 
 // AddComponentToIncident adds a component and a status update to an incident using optimistic locking.
-func (db *DB) AddComponentToIncident(inc *Incident, comp *Component, status IncidentStatus) error {
+func (db *DB) AddComponentToIncident(ctx context.Context, inc *Incident, comp *Component, status IncidentStatus) error {
 	if inc.Version == nil {
 		return errors.New("version is required for incident modification")
 	}
 
 	expectedVersion := *inc.Version
 	newVersion := expectedVersion + 1
-	ctx := context.Background()
 
 	err := db.execWithTx(ctx, nil, func(client *ent.Client, _ entsql.ExecQuerier) error {
 		affected, err := client.Incident.Update().
@@ -517,10 +511,10 @@ func (db *DB) AddComponentToIncident(inc *Incident, comp *Component, status Inci
 }
 
 // ReOpenIncident the special function if you need to NULL your end_date.
-func (db *DB) ReOpenIncident(inc *Incident) error {
+func (db *DB) ReOpenIncident(ctx context.Context, inc *Incident) error {
 	err := db.e.Incident.UpdateOneID(int(inc.ID)).
 		ClearEndDate().
-		Exec(context.Background())
+		Exec(ctx)
 	if ent.IsNotFound(err) {
 		return nil
 	}
@@ -532,13 +526,11 @@ func (db *DB) ReOpenIncident(inc *Incident) error {
 // Not affected to getActiveEventsForComponent (v2.go) because IsActive filter already contains
 // exceptions for "event.TypeMaintenance, event.MaintenancePendingReview, event.MaintenanceReviewed".
 // Supports optional filtering parameters: isActive, Types, LastCount.
-func (db *DB) GetEventsByComponentID(componentID uint, params ...*IncidentsParams) ([]*Incident, error) {
+func (db *DB) GetEventsByComponentID(ctx context.Context, componentID uint, params ...*IncidentsParams) ([]*Incident, error) {
 	var param IncidentsParams
 	if params != nil && params[0] != nil {
 		param = *params[0]
 	}
-
-	ctx := context.Background()
 
 	preds := []predicate.Incident{
 		incident.HasComponentsWith(component.IDEQ(int(componentID))),
@@ -603,15 +595,13 @@ func (db *DB) GetEventsByComponentID(componentID uint, params ...*IncidentsParam
 	return incidents, nil
 }
 
-func (db *DB) GetIncidentsByComponentAttr(attr *ComponentAttr, params ...*IncidentsParams) ([]*Incident, error) {
+func (db *DB) GetIncidentsByComponentAttr(ctx context.Context, attr *ComponentAttr, params ...*IncidentsParams) ([]*Incident, error) {
 	// Get all public incidents for components with this attribute.
 	// Maintenance events in pending_review/reviewed status are excluded (require authentication).
 	var param IncidentsParams
 	if params != nil && params[0] != nil {
 		param = *params[0]
 	}
-
-	ctx := context.Background()
 
 	// The previous ORM joined the relation and the attribute tables directly, so an
 	// incident matched by several components appeared once per match. The raw id
@@ -637,11 +627,11 @@ func (db *DB) GetIncidentsByComponentAttr(attr *ComponentAttr, params ...*Incide
 	return db.incidentsByIDs(ctx, ids)
 }
 
-func (db *DB) GetComponent(id int) (*Component, error) {
+func (db *DB) GetComponent(ctx context.Context, id int) (*Component, error) {
 	e, err := db.e.Component.Query().
 		Where(component.IDEQ(id)).
 		WithAttributes().
-		First(context.Background())
+		First(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return nil, ErrDBComponentDSNotExist
@@ -653,8 +643,8 @@ func (db *DB) GetComponent(id int) (*Component, error) {
 	return &comp, nil
 }
 
-func (db *DB) GetComponentsAsMap() (map[int]*Component, error) {
-	rows, err := db.e.Component.Query().All(context.Background())
+func (db *DB) GetComponentsAsMap(ctx context.Context) (map[int]*Component, error) {
+	rows, err := db.e.Component.Query().All(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -668,10 +658,10 @@ func (db *DB) GetComponentsAsMap() (map[int]*Component, error) {
 	return compMap, nil
 }
 
-func (db *DB) GetComponentsWithValues() ([]Component, error) {
+func (db *DB) GetComponentsWithValues(ctx context.Context) ([]Component, error) {
 	rows, err := db.e.Component.Query().
 		WithAttributes().
-		All(context.Background())
+		All(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -684,9 +674,7 @@ func (db *DB) GetComponentsWithValues() ([]Component, error) {
 	return components, nil
 }
 
-func (db *DB) GetComponentsWithIncidents() ([]Component, error) {
-	ctx := context.Background()
-
+func (db *DB) GetComponentsWithIncidents(ctx context.Context) ([]Component, error) {
 	rows, err := db.e.Component.Query().
 		WithAttributes().
 		WithIncidents().
@@ -716,7 +704,7 @@ func (db *DB) GetComponentsWithIncidents() ([]Component, error) {
 }
 
 // GetComponentFromNameAttrs returns the Component from its name and region attribute.
-func (db *DB) GetComponentFromNameAttrs(name string, attr *ComponentAttr) (*Component, error) {
+func (db *DB) GetComponentFromNameAttrs(ctx context.Context, name string, attr *ComponentAttr) (*Component, error) {
 	e, err := db.e.Component.Query().
 		Where(
 			component.NameEQ(name),
@@ -724,7 +712,7 @@ func (db *DB) GetComponentFromNameAttrs(name string, attr *ComponentAttr) (*Comp
 		).
 		WithAttributes().
 		Order(component.ByID(entsql.OrderAsc())).
-		First(context.Background())
+		First(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return nil, ErrDBComponentDSNotExist
@@ -736,9 +724,7 @@ func (db *DB) GetComponentFromNameAttrs(name string, attr *ComponentAttr) (*Comp
 	return &comp, nil
 }
 
-func (db *DB) SaveComponent(comp *Component) (uint, error) {
-	ctx := context.Background()
-
+func (db *DB) SaveComponent(ctx context.Context, comp *Component) (uint, error) {
 	// Validate required region attribute
 	hasRegion := false
 	for _, attr := range comp.Attrs {
@@ -815,12 +801,12 @@ func (db *DB) SaveComponent(comp *Component) (uint, error) {
 }
 
 func (db *DB) MoveComponentFromOldToAnotherIncident(
-	comp *Component, incOld, incNew *Incident, closeOld bool,
+	ctx context.Context, comp *Component, incOld, incNew *Incident, closeOld bool,
 ) (*Incident, error) {
 	timeNow := time.Now().UTC()
 
 	if comp.Name == "" {
-		c, err := db.GetComponent(int(comp.ID))
+		c, err := db.GetComponent(ctx, int(comp.ID))
 		if err != nil {
 			return nil, err
 		}
@@ -855,18 +841,18 @@ func (db *DB) MoveComponentFromOldToAnotherIncident(
 		incOld.EndDate = &timeNow
 	}
 
-	err := db.execWithTx(context.Background(), nil, func(client *ent.Client, _ entsql.ExecQuerier) error {
+	err := db.execWithTx(ctx, nil, func(client *ent.Client, _ entsql.ExecQuerier) error {
 		if !closeOld && comp.ID != 0 {
-			if errRemove := removeIncidentComponent(context.Background(), client, incOld.ID, comp.ID); errRemove != nil {
+			if errRemove := removeIncidentComponent(ctx, client, incOld.ID, comp.ID); errRemove != nil {
 				return errRemove
 			}
 			dropIncidentComponent(incOld, comp.ID)
 		}
 
-		if errSave := saveIncidentFull(context.Background(), client, incNew); errSave != nil {
+		if errSave := saveIncidentFull(ctx, client, incNew); errSave != nil {
 			return errSave
 		}
-		return saveIncidentFull(context.Background(), client, incOld)
+		return saveIncidentFull(ctx, client, incOld)
 	})
 	if err != nil {
 		return nil, err
@@ -876,7 +862,7 @@ func (db *DB) MoveComponentFromOldToAnotherIncident(
 }
 
 func (db *DB) ExtractComponentsToNewIncident(
-	comp []Component, incOld *Incident, impact int, text string, description *string,
+	ctx context.Context, comp []Component, incOld *Incident, impact int, text string, description *string,
 ) (*Incident, error) {
 	if len(comp) == 0 {
 		return nil, fmt.Errorf("no components to extract")
@@ -897,7 +883,7 @@ func (db *DB) ExtractComponentsToNewIncident(
 		Components:  comp,
 	}
 
-	id, err := db.SaveIncident(inc)
+	id, err := db.SaveIncident(ctx, inc)
 	if err != nil {
 		return nil, err
 	}
@@ -923,22 +909,22 @@ func (db *DB) ExtractComponentsToNewIncident(
 	}
 
 	// Use a transaction to save both incidents with their statuses and update associations
-	err = db.execWithTx(context.Background(), nil, func(client *ent.Client, _ entsql.ExecQuerier) error {
+	err = db.execWithTx(ctx, nil, func(client *ent.Client, _ entsql.ExecQuerier) error {
 		// Remove component from old incident
 		for i := range comp {
 			if comp[i].ID == 0 {
 				continue
 			}
-			if errRemove := removeIncidentComponent(context.Background(), client, incOld.ID, comp[i].ID); errRemove != nil {
+			if errRemove := removeIncidentComponent(ctx, client, incOld.ID, comp[i].ID); errRemove != nil {
 				return errRemove
 			}
 			dropIncidentComponent(incOld, comp[i].ID)
 		}
 
-		if errSave := saveIncidentFull(context.Background(), client, inc); errSave != nil {
+		if errSave := saveIncidentFull(ctx, client, inc); errSave != nil {
 			return errSave
 		}
-		return saveIncidentFull(context.Background(), client, incOld)
+		return saveIncidentFull(ctx, client, incOld)
 	})
 	if err != nil {
 		return nil, err
@@ -947,7 +933,7 @@ func (db *DB) ExtractComponentsToNewIncident(
 	return inc, nil
 }
 
-func (db *DB) IncreaseIncidentImpact(inc *Incident, impact int) (*Incident, error) {
+func (db *DB) IncreaseIncidentImpact(ctx context.Context, inc *Incident, impact int) (*Incident, error) {
 	timeNow := time.Now().UTC()
 	text := fmt.Sprintf("impact changed from %d to %d", *inc.Impact, impact)
 	inc.Statuses = append(inc.Statuses, IncidentStatus{
@@ -964,7 +950,6 @@ func (db *DB) IncreaseIncidentImpact(inc *Incident, impact int) (*Incident, erro
 	// Only non-zero fields are written for the incident row, mirroring the
 	// previous struct-based update. incident_status has no Ent edge, so the
 	// appended status row is inserted directly in the same transaction.
-	ctx := context.Background()
 	tx, err := db.e.Tx(ctx)
 	if err != nil {
 		return nil, err
@@ -1032,12 +1017,12 @@ func (db *DB) IncreaseIncidentImpact(inc *Incident, impact int) (*Incident, erro
 	return inc, nil
 }
 
-func (db *DB) GetUniqueAttributeValues(attrName string) ([]string, error) {
+func (db *DB) GetUniqueAttributeValues(ctx context.Context, attrName string) ([]string, error) {
 	rows, err := db.e.ComponentAttr.Query().
 		Where(componentattr.NameEQ(attrName)).
 		Select(componentattr.FieldValue).
 		Order(componentattr.ByValue(entsql.OrderAsc())).
-		All(context.Background())
+		All(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1053,11 +1038,11 @@ func (db *DB) GetUniqueAttributeValues(attrName string) ([]string, error) {
 	return values, nil
 }
 
-func (db *DB) GetEventUpdates(incidentID uint) ([]IncidentStatus, error) {
+func (db *DB) GetEventUpdates(ctx context.Context, incidentID uint) ([]IncidentStatus, error) {
 	rows, err := db.e.IncidentStatus.Query().
 		Where(incidentstatus.IncidentID(int(incidentID))).
 		Order(incidentstatus.ByID(entsql.OrderAsc())).
-		All(context.Background())
+		All(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1072,8 +1057,7 @@ func (db *DB) GetEventUpdates(incidentID uint) ([]IncidentStatus, error) {
 
 // ModifyEventUpdateTx patches an event status update's text using the provided
 // transaction and returns the updated row.
-func (db *DB) ModifyEventUpdateTx(tx *Tx, update IncidentStatus) (IncidentStatus, error) {
-	ctx := context.Background()
+func (db *DB) ModifyEventUpdateTx(ctx context.Context, tx *Tx, update IncidentStatus) (IncidentStatus, error) {
 	c := db.clientFor(tx)
 	now := time.Now().UTC()
 
@@ -1102,6 +1086,6 @@ func (db *DB) ModifyEventUpdateTx(tx *Tx, update IncidentStatus) (IncidentStatus
 	return incidentStatusFromEnt(row), nil
 }
 
-func (db *DB) ModifyEventUpdate(update IncidentStatus) (IncidentStatus, error) {
-	return db.ModifyEventUpdateTx(nil, update)
+func (db *DB) ModifyEventUpdate(ctx context.Context, update IncidentStatus) (IncidentStatus, error) {
+	return db.ModifyEventUpdateTx(ctx, nil, update)
 }

@@ -19,7 +19,7 @@ func TestWithTx_CommitsIncidentAndOutboxAtomically(t *testing.T) {
 
 	var incID uint
 	err := d.WithTx(ctx, func(tx *db.Tx) error {
-		id, e := d.SaveIncidentTx(tx, newMaintenanceIncident())
+		id, e := d.SaveIncidentTx(ctx, tx, newMaintenanceIncident())
 		if e != nil {
 			return e
 		}
@@ -42,7 +42,7 @@ func TestWithTx_RollsBackBothOnError(t *testing.T) {
 	var incID uint
 	var dedup string
 	err := d.WithTx(ctx, func(tx *db.Tx) error {
-		id, e := d.SaveIncidentTx(tx, newMaintenanceIncident())
+		id, e := d.SaveIncidentTx(ctx, tx, newMaintenanceIncident())
 		if e != nil {
 			return e
 		}
@@ -67,20 +67,20 @@ func TestModifyIncidentTx_SharedTxWithEnqueue(t *testing.T) {
 	d, g := newNotifDB(t)
 
 	incID := seedIncident(t, d)
-	inc, err := d.GetIncident(int(incID))
+	inc, err := d.GetIncident(ctx, int(incID))
 	require.NoError(t, err)
 	inc.Status = event.MaintenanceReviewed
 
 	row := newOutboxRow(incID, "creator@com.com")
 	err = d.WithTx(ctx, func(tx *db.Tx) error {
-		if e := d.ModifyIncidentTx(tx, inc); e != nil {
+		if e := d.ModifyIncidentTx(ctx, tx, inc); e != nil {
 			return e
 		}
 		return d.Enqueue(ctx, tx, row)
 	})
 	require.NoError(t, err)
 
-	got, err := d.GetIncident(int(incID))
+	got, err := d.GetIncident(ctx, int(incID))
 	require.NoError(t, err)
 	assert.Equal(t, event.MaintenanceReviewed, got.Status)
 
@@ -97,7 +97,7 @@ func TestModifyEventUpdateTx_UpdatesText(t *testing.T) {
 
 	var updated db.IncidentStatus
 	err := d.WithTx(context.Background(), func(tx *db.Tx) error {
-		u, e := d.ModifyEventUpdateTx(tx, db.IncidentStatus{
+		u, e := d.ModifyEventUpdateTx(context.Background(), tx, db.IncidentStatus{
 			ID: statusID, IncidentID: incID, Text: "patched",
 		})
 		if e != nil {

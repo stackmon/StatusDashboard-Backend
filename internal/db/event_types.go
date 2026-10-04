@@ -9,9 +9,7 @@ import (
 )
 
 // getEventsByType lists events of a single type with their update history.
-func (db *DB) getEventsByType(eventType incident.Type, order entsql.OrderTermOption) ([]*Incident, error) {
-	ctx := context.Background()
-
+func (db *DB) getEventsByType(ctx context.Context, eventType incident.Type, order entsql.OrderTermOption) ([]*Incident, error) {
 	query := db.e.Incident.Query().
 		Where(incident.TypeEQ(eventType)).
 		Order(incident.ByID(order))

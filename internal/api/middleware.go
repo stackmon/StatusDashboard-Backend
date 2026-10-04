@@ -38,7 +38,7 @@ func ValidateComponentsMW(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 
 		// TODO: move this list to the memory cache
 		// We should check, that all components are presented in our db.
-		dbComps, err := dbInst.GetComponentsAsMap()
+		dbComps, err := dbInst.GetComponentsAsMap(c.Request.Context())
 		if err != nil {
 			apiErrors.RaiseInternalErr(c, err)
 			return
@@ -228,7 +228,7 @@ func CheckEventExistenceMW(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 			return
 		}
 
-		event, err := dbInst.GetIncident(incID.ID)
+		event, err := dbInst.GetIncident(c.Request.Context(), incID.ID)
 		if err != nil {
 			if errors.Is(err, db.ErrDBIncidentDSNotExist) {
 				apiErrors.RaiseStatusNotFoundErr(c, apiErrors.ErrIncidentDSNotExist)

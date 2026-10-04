@@ -84,7 +84,7 @@ func TestListNotificationsByStatus(t *testing.T) {
 
 func TestEnsureNotificationSchema(t *testing.T) {
 	d, _ := newNotifDB(t)
-	require.NoError(t, d.EnsureNotificationSchema(), "migrations are applied in the test DB")
+	require.NoError(t, d.EnsureNotificationSchema(context.Background()), "migrations are applied in the test DB")
 }
 
 func TestRedriveFailed_AllAndByID(t *testing.T) {
