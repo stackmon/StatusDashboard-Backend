@@ -330,8 +330,12 @@ func toAPIEvent(inc *db.Incident, isAuth bool) *Incident {
 		components[i] = int(comp.ID)
 	}
 
+	updates, latestDescription := mapEventUpdates(inc.Statuses, isAuth, inc.EndDate, inc.Type)
+
 	var description string
-	if inc.Description != nil {
+	if latestDescription != "" {
+		description = latestDescription
+	} else if inc.Description != nil {
 		description = *inc.Description
 	}
 
@@ -343,8 +347,8 @@ func toAPIEvent(inc *db.Incident, isAuth bool) *Incident {
 		StartDate:   *inc.StartDate,
 		EndDate:     inc.EndDate,
 		System:      &inc.System,
-		Updates:     mapEventUpdates(inc.Statuses, isAuth),
-		Status:      inc.Status,
+		Updates:     updates,
+		Status:      normalizeStatus(inc.Status, inc.EndDate, inc.Type),
 		Type:        inc.Type,
 	}
 
@@ -1848,23 +1852,62 @@ func PatchEventUpdateTextHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerF
 	}
 }
 
-func mapEventUpdates(statuses []db.IncidentStatus, isAuth bool) []EventUpdateData {
+// mapEventUpdates maps stored status rows to the API updates array. Rows with
+// status "description" are not status entries: they are dropped from the array
+// and the latest one is returned as the event description.
+func mapEventUpdates(statuses []db.IncidentStatus, isAuth bool, endDate *time.Time, eventType string) ([]EventUpdateData, string) {
 	updates := make([]EventUpdateData, 0, len(statuses))
 	idx := 0
+	var latestDescription string
+	var lastStatus event.Status
 	for _, s := range statuses {
+		if s.Status == event.Status("description") {
+			latestDescription = s.Text
+			continue
+		}
 		if !isAuth && isInternalStatus(s.Status) {
 			continue
 		}
+		status := normalizeStatus(s.Status, endDate, eventType)
+		if status == event.IncidentChanged || status == event.IncidentImpactChanged {
+			status = lastStatus
+		}
+		lastStatus = status
 		updates = append(updates, EventUpdateData{
 			ID:        idx,
-			Status:    s.Status,
+			Status:    status,
 			Text:      s.Text,
 			Timestamp: s.Timestamp,
 		})
 		idx++
 	}
 
-	return updates
+	return updates, latestDescription
+}
+
+// normalizeStatus maps non-canonical status values stored in the database to
+// their canonical form. "changed" and "impact changed" are not status changes;
+// they are passed through and replaced by the previous normalized status in
+// the updates sequence so the history does not show a spurious jump.
+func normalizeStatus(raw event.Status, endDate *time.Time, eventType string) event.Status {
+	switch raw {
+	case "analyzing":
+		return event.IncidentAnalysing
+	case "in progress":
+		return event.MaintenanceInProgress
+	case "scheduled":
+		return event.MaintenancePlanned
+	case event.OutDatedSystem:
+		if endDate == nil {
+			return raw
+		}
+		if eventType == event.TypeIncident {
+			return event.IncidentResolved
+		}
+		return event.MaintenanceCompleted
+	default:
+		return raw
+	}
 }
 
 // isInternalStatus returns true for statuses that should not be exposed to public (non-authenticated) users.
