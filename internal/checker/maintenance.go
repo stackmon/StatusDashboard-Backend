@@ -53,10 +53,10 @@ func (st *MntStatusHistory) setStatus(status event.Status) {
 	}
 }
 
-func (ch *Checker) CheckMaintenance() error {
+func (ch *Checker) CheckMaintenance(ctx context.Context) error {
 	ch.log.Info("check maintenances statuses")
 
-	maintenances, err := ch.db.GetMaintenances()
+	maintenances, err := ch.db.GetMaintenances(ctx)
 	if err != nil {
 		return err
 	}
@@ -68,7 +68,7 @@ func (ch *Checker) CheckMaintenance() error {
 			continue
 		}
 
-		if processErr := ch.processMaintenance(mn); processErr != nil {
+		if processErr := ch.processMaintenance(ctx, mn); processErr != nil {
 			ch.log.Error("failed to process maintenance",
 				zap.Uint("mntID", mn.ID), zap.Error(processErr))
 			continue
@@ -88,7 +88,7 @@ func needsRefetch(mn *db.Incident) bool {
 	return mn.Status != calculateCurrentMntStatus(calculateMntStatusHistory(mn), mn)
 }
 
-func (ch *Checker) processMaintenance(mn *db.Incident) error {
+func (ch *Checker) processMaintenance(ctx context.Context, mn *db.Incident) error {
 	// Decide from the batch-loaded state whether the status will change. Only
 	// then refetch: a fresh read immediately before the read-modify-write
 	// shrinks the version-conflict window, and the write is the only place the
@@ -98,7 +98,7 @@ func (ch *Checker) processMaintenance(mn *db.Incident) error {
 		return nil
 	}
 
-	fresh, err := ch.db.GetIncident(int(mn.ID))
+	fresh, err := ch.db.GetIncident(ctx, int(mn.ID))
 	if err != nil {
 		return fmt.Errorf("refetch maintenance %d: %w", mn.ID, err)
 	}
@@ -112,11 +112,11 @@ func (ch *Checker) processMaintenance(mn *db.Incident) error {
 	fresh.Status = actualStatus
 	// The modify + enqueue share one transaction: on a version conflict the
 	// whole thing rolls back and no notification is published.
-	txErr := ch.db.WithTx(context.Background(), func(tx *db.Tx) error {
-		if modErr := ch.db.ModifyIncidentTx(tx, fresh); modErr != nil {
+	txErr := ch.db.WithTx(ctx, func(tx *db.Tx) error {
+		if modErr := ch.db.ModifyIncidentTx(ctx, tx, fresh); modErr != nil {
 			return modErr
 		}
-		return ch.notifier.PublishTx(context.Background(), tx, notification.Change{
+		return ch.notifier.PublishTx(ctx, tx, notification.Change{
 			IncidentID:   fresh.ID,
 			Title:        strDeref(fresh.Text),
 			OldStatus:    oldStatus,

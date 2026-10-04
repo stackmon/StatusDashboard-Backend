@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -58,7 +59,7 @@ func TestChecker_ReviewedToPlanned_EnqueuesStatusChangedToCreator(t *testing.T) 
 
 	chk := newTestChecker(t)
 
-	require.NoError(t, chk.CheckMaintenance()) // reviewed -> planned
+	require.NoError(t, chk.CheckMaintenance(context.Background())) // reviewed -> planned
 
 	rows := queryOutbox(t, g, "incident_id = $1", eventID)
 	require.Len(t, rows, 1, "one notification per real transition")
@@ -79,7 +80,7 @@ func TestChecker_NoTransition_EnqueuesNothing(t *testing.T) {
 	chk := newTestChecker(t)
 
 	// Planned with a future start date: the checker computes planned again -> no change.
-	require.NoError(t, chk.CheckMaintenance())
+	require.NoError(t, chk.CheckMaintenance(context.Background()))
 
 	assert.Equal(t, int64(0), outboxCount(t, g, eventID), "no notification without a real transition")
 }
@@ -100,8 +101,8 @@ func TestChecker_SteadyState_SkipsRefetch(t *testing.T) {
 
 	chk := newTestChecker(t)
 
-	require.NoError(t, chk.CheckMaintenance())
-	require.NoError(t, chk.CheckMaintenance())
+	require.NoError(t, chk.CheckMaintenance(context.Background()))
+	require.NoError(t, chk.CheckMaintenance(context.Background()))
 
 	after := getEventOK(t, r, eventID, adminToken)
 	assert.Equal(t, initialVersion, eventVersion(after), "steady-state scan must not bump the version")

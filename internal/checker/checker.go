@@ -26,9 +26,9 @@ func New(database *db.DB, log *zap.Logger, notifier *notification.Publisher) *Ch
 
 // Check runs one full scan and returns the combined error of its two halves. It
 // is the body of the scheduler's scan task, which holds the advisory lock for the
-// whole round. Cancellation is observed only before the round starts: the two
-// scans do not take a context yet, so a caller must not close the pool while
-// Check is running.
+// whole round. Cancellation is observed throughout the round, so a caller must
+// not close the pool while Check is running; a round aborted mid-scan leaves the
+// remaining events to the next tick.
 func (ch *Checker) Check(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -43,7 +43,7 @@ func (ch *Checker) Check(ctx context.Context) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := ch.CheckMaintenance(); err != nil {
+		if err := ch.CheckMaintenance(ctx); err != nil {
 			ch.log.Error("error to check maintenances", zap.Error(err))
 			mntErr = err
 		}
@@ -52,7 +52,7 @@ func (ch *Checker) Check(ctx context.Context) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := ch.CheckInfoEvents(); err != nil {
+		if err := ch.CheckInfoEvents(ctx); err != nil {
 			ch.log.Error("error to check info events", zap.Error(err))
 			infoErr = err
 		}

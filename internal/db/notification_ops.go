@@ -84,10 +84,10 @@ func (db *DB) ListNotificationsByStatus(ctx context.Context, status string, limi
 // EnsureNotificationSchema reports whether the outbox table exists. Migrations are
 // applied out of band, so without this check a stale database would let the app start
 // and only fail on the first maintenance change.
-func (db *DB) EnsureNotificationSchema() error {
+func (db *DB) EnsureNotificationSchema(ctx context.Context) error {
 	var count int
 	if err := db.sql.QueryRowContext(
-		context.Background(),
+		ctx,
 		`SELECT count(*) FROM information_schema.tables
 		 WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'notification_outbox'
 		   AND table_type = 'BASE TABLE'`,

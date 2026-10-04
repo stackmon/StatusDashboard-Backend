@@ -92,7 +92,7 @@ func buildWorker(
 		return nil, nil, nil
 	}
 
-	if err = dbNew.EnsureNotificationSchema(); err != nil {
+	if err = dbNew.EnsureNotificationSchema(context.Background()); err != nil {
 		return nil, nil, err
 	}
 

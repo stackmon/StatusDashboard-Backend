@@ -1,6 +1,7 @@
 package rss
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"sort"
@@ -45,7 +46,7 @@ func HandleRSS(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 			baseURL:       baseURL,
 		}
 
-		incidents, err := getIncidents(dbInst, logger, params, maxIncidents)
+		incidents, err := getIncidents(c.Request.Context(), dbInst, logger, params, maxIncidents)
 		if err != nil {
 			if componentName != "" {
 				apiErrors.RaiseStatusNotFoundErr(c, err)
@@ -102,7 +103,9 @@ type feedParams struct {
 	baseURL       string
 }
 
-func getIncidents(dbInstance *db.DB, log *zap.Logger, params feedParams, maxIncidents int) ([]*db.Incident, error) {
+func getIncidents(
+	ctx context.Context, dbInstance *db.DB, log *zap.Logger, params feedParams, maxIncidents int,
+) ([]*db.Incident, error) {
 	var incidents []*db.Incident
 	var err error
 
@@ -116,13 +119,13 @@ func getIncidents(dbInstance *db.DB, log *zap.Logger, params feedParams, maxInci
 		}
 
 		var component *db.Component
-		component, err = dbInstance.GetComponentFromNameAttrs(params.componentName, attr)
+		component, err = dbInstance.GetComponentFromNameAttrs(ctx, params.componentName, attr)
 		if err != nil {
 			log.Error("failed to get component", zap.Error(err))
 			return nil, err
 		}
 
-		incidents, err = dbInstance.GetEventsByComponentID(component.ID, incParams)
+		incidents, err = dbInstance.GetEventsByComponentID(ctx, component.ID, incParams)
 		if err != nil {
 			return nil, err
 		}
@@ -132,12 +135,12 @@ func getIncidents(dbInstance *db.DB, log *zap.Logger, params feedParams, maxInci
 			Value: params.region,
 		}
 
-		incidents, err = dbInstance.GetIncidentsByComponentAttr(attr, incParams)
+		incidents, err = dbInstance.GetIncidentsByComponentAttr(ctx, attr, incParams)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		incidents, err = dbInstance.GetEvents(db.PublicAccess, incParams)
+		incidents, err = dbInstance.GetEvents(ctx, db.PublicAccess, incParams)
 		if err != nil {
 			return nil, err
 		}

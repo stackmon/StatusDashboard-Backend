@@ -1,6 +1,7 @@
 package checker
 
 import (
+	"context"
 	"time"
 
 	"go.uber.org/zap"
@@ -45,10 +46,10 @@ func (st *InfoStatusHistory) setStatus(status event.Status) {
 	}
 }
 
-func (ch *Checker) CheckInfoEvents() error {
+func (ch *Checker) CheckInfoEvents(ctx context.Context) error {
 	ch.log.Info("check info event statuses")
 
-	infos, err := ch.db.GetInfoEvents()
+	infos, err := ch.db.GetInfoEvents(ctx)
 	if err != nil {
 		return err
 	}
@@ -72,7 +73,7 @@ func (ch *Checker) CheckInfoEvents() error {
 		// Only update the incident if the status has actually changed
 		if info.Status != actualStatus {
 			info.Status = actualStatus
-			err = ch.db.ModifyIncident(info)
+			err = ch.db.ModifyIncident(ctx, info)
 			if err != nil {
 				return err
 			}
