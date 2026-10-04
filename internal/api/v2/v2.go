@@ -1897,7 +1897,9 @@ func mapEventUpdates(
 
 // eventStatus normalizes the stored event status. "changed" and "impact changed"
 // annotate a change rather than denote a state, so they are collapsed to the
-// previous status from the update history, matching the updates sequence.
+// previous status from the update history, matching the updates sequence. It
+// walks the full history, so unlike updates[] the result does not depend on the
+// caller's visibility.
 func eventStatus(inc *db.Incident) event.Status {
 	status := normalizeStatus(inc.Status, inc.EndDate, inc.Type)
 	if status != event.IncidentChanged && status != event.IncidentImpactChanged {

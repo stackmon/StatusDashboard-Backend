@@ -164,6 +164,23 @@ func TestEventStatus_MatchesLastUpdate(t *testing.T) {
 	assert.Equal(t, eventStatus(inc), updates[len(updates)-1].Status)
 }
 
+func TestEventStatus_DoesNotDependOnVisibility(t *testing.T) {
+	testTime := time.Now().UTC()
+
+	statuses := []db.IncidentStatus{
+		{Status: event.MaintenancePlanned, Text: "planned", Timestamp: testTime},
+		{Status: event.MaintenanceReviewed, Text: "reviewed", Timestamp: testTime},
+	}
+	inc := &db.Incident{Type: event.TypeMaintenance, Status: event.MaintenanceReviewed, Statuses: statuses}
+
+	assert.Equal(t, event.MaintenanceReviewed, eventStatus(inc))
+
+	// The unauthenticated view filters the trailing internal row, so the last
+	// visible update can differ from the view-independent event status.
+	public, _ := mapEventUpdates(statuses, false, inc.Status, inc.EndDate, inc.Type)
+	assert.Equal(t, event.MaintenancePlanned, public[len(public)-1].Status)
+}
+
 func TestMapEventUpdates_ChangedStatusesKeepPrevious(t *testing.T) {
 	testTime := time.Now().UTC()
 
