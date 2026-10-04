@@ -83,3 +83,27 @@ func TestChecker_NoTransition_EnqueuesNothing(t *testing.T) {
 
 	assert.Equal(t, int64(0), outboxCount(t, g, eventID), "no notification without a real transition")
 }
+
+// TestChecker_SteadyState_SkipsRefetch verifies that a steady-state maintenance
+// (status already matches the computed target) is left untouched: no version
+// bump and no outbox rows, even across repeated scans.
+func TestChecker_SteadyState_SkipsRefetch(t *testing.T) {
+	truncateIncidents(t)
+
+	r := initTests(t)
+	resp := createEventOK(t, r, maintenanceData(), adminToken) // admin -> planned (future start)
+	eventID := resp.Result[0].IncidentID
+
+	g := openRawDB(t)
+	inc := getEventOK(t, r, eventID, adminToken)
+	initialVersion := eventVersion(inc)
+
+	chk := newTestChecker(t)
+
+	require.NoError(t, chk.CheckMaintenance())
+	require.NoError(t, chk.CheckMaintenance())
+
+	after := getEventOK(t, r, eventID, adminToken)
+	assert.Equal(t, initialVersion, eventVersion(after), "steady-state scan must not bump the version")
+	assert.Equal(t, int64(0), outboxCount(t, g, eventID), "steady-state scan must not enqueue")
+}
