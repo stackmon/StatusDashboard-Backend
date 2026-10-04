@@ -11,6 +11,61 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/event"
 )
 
+func TestNeedsRefetch(t *testing.T) {
+	future := time.Now().UTC().Add(24 * time.Hour)
+	past := time.Now().UTC().Add(-24 * time.Hour)
+
+	tests := []struct {
+		name     string
+		mn       *db.Incident
+		expected bool
+	}{
+		{
+			name: "planned with future start is steady-state",
+			mn: &db.Incident{
+				Status:    event.MaintenancePlanned,
+				StartDate: &future,
+				Statuses:  []db.IncidentStatus{{Status: event.MaintenancePlanned}},
+			},
+			expected: false,
+		},
+		{
+			name: "planned with past start needs refetch",
+			mn: &db.Incident{
+				Status:    event.MaintenancePlanned,
+				StartDate: &past,
+				Statuses:  []db.IncidentStatus{{Status: event.MaintenancePlanned}},
+			},
+			expected: true,
+		},
+		{
+			name: "reviewed auto-approves to planned, needs refetch",
+			mn: &db.Incident{
+				Status:    event.MaintenanceReviewed,
+				StartDate: &future,
+				Statuses:  []db.IncidentStatus{{Status: event.MaintenanceReviewed}},
+			},
+			expected: true,
+		},
+		{
+			name: "completed with past end is steady-state",
+			mn: &db.Incident{
+				Status:    event.MaintenanceCompleted,
+				StartDate: &past,
+				EndDate:   &past,
+				Statuses:  []db.IncidentStatus{{Status: event.MaintenanceCompleted}},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, needsRefetch(tc.mn))
+		})
+	}
+}
+
 func TestCalculateCurrentMntStatus(t *testing.T) {
 	future := time.Now().UTC().Add(24 * time.Hour)
 	farFuture := future.Add(48 * time.Hour)

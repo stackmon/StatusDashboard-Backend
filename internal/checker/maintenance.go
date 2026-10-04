@@ -80,43 +80,55 @@ func (ch *Checker) CheckMaintenance() error {
 	return nil
 }
 
+// needsRefetch reports whether the batch-loaded state already agrees with the
+// status the checker would compute. When it does, the event is steady-state and
+// the per-event refetch can be skipped; when it does not, a fresh read is needed
+// before the read-modify-write.
+func needsRefetch(mn *db.Incident) bool {
+	return mn.Status != calculateCurrentMntStatus(calculateMntStatusHistory(mn), mn)
+}
+
 func (ch *Checker) processMaintenance(mn *db.Incident) error {
-	// Refetch immediately before the read-modify-write. The bulk
-	// GetMaintenances above is N items old by the time we reach item N;
-	// using its preloaded state for the version check races concurrent
-	// API edits. A single fresh read shrinks the race window from
-	// "duration of the whole tick" to "one DB round-trip", which makes
-	// ErrVersionConflict effectively unreachable without a retry loop.
-	mn, err := ch.db.GetIncident(int(mn.ID))
+	// Decide from the batch-loaded state whether the status will change. Only
+	// then refetch: a fresh read immediately before the read-modify-write
+	// shrinks the version-conflict window, and the write is the only place the
+	// backfilled statuses persist. Steady-state events (no change) skip the
+	// refetch, but every event is still scanned so manual DB edits are caught.
+	if !needsRefetch(mn) {
+		return nil
+	}
+
+	fresh, err := ch.db.GetIncident(int(mn.ID))
 	if err != nil {
 		return fmt.Errorf("refetch maintenance %d: %w", mn.ID, err)
 	}
 
-	actualStatus := ch.evaluateAndFixMntStatus(mn)
-
-	if mn.Status != actualStatus {
-		oldStatus := mn.Status
-		mn.Status = actualStatus
-		// The modify + enqueue share one transaction: on a version conflict the
-		// whole thing rolls back and no notification is published.
-		txErr := ch.db.WithTx(context.Background(), func(tx *db.Tx) error {
-			if modErr := ch.db.ModifyIncidentTx(tx, mn); modErr != nil {
-				return modErr
-			}
-			return ch.notifier.PublishTx(context.Background(), tx, notification.Change{
-				IncidentID:   mn.ID,
-				Title:        strDeref(mn.Text),
-				OldStatus:    oldStatus,
-				NewStatus:    mn.Status,
-				ContactEmail: strDeref(mn.ContactEmail),
-				Actor:        notification.ActorChecker,
-			})
-		})
-		if txErr != nil {
-			return fmt.Errorf("update maintenance %d: %w", mn.ID, txErr)
-		}
-		ch.notifier.Notify() // wake the worker after the commit
+	actualStatus := ch.evaluateAndFixMntStatus(fresh)
+	if fresh.Status == actualStatus {
+		return nil
 	}
+
+	oldStatus := fresh.Status
+	fresh.Status = actualStatus
+	// The modify + enqueue share one transaction: on a version conflict the
+	// whole thing rolls back and no notification is published.
+	txErr := ch.db.WithTx(context.Background(), func(tx *db.Tx) error {
+		if modErr := ch.db.ModifyIncidentTx(tx, fresh); modErr != nil {
+			return modErr
+		}
+		return ch.notifier.PublishTx(context.Background(), tx, notification.Change{
+			IncidentID:   fresh.ID,
+			Title:        strDeref(fresh.Text),
+			OldStatus:    oldStatus,
+			NewStatus:    fresh.Status,
+			ContactEmail: strDeref(fresh.ContactEmail),
+			Actor:        notification.ActorChecker,
+		})
+	})
+	if txErr != nil {
+		return fmt.Errorf("update maintenance %d: %w", mn.ID, txErr)
+	}
+	ch.notifier.Notify() // wake the worker after the commit
 
 	return nil
 }

@@ -5,8 +5,6 @@ import (
 
 	entsql "entgo.io/ent/dialect/sql"
 
-	"github.com/stackmon/otc-status-dashboard/ent"
-	"github.com/stackmon/otc-status-dashboard/ent/component"
 	"github.com/stackmon/otc-status-dashboard/ent/incident"
 )
 
@@ -16,9 +14,6 @@ func (db *DB) getEventsByType(eventType incident.Type, order entsql.OrderTermOpt
 
 	query := db.e.Incident.Query().
 		Where(incident.TypeEQ(eventType)).
-		WithComponents(func(q *ent.ComponentQuery) {
-			q.Select(component.FieldID)
-		}).
 		Order(incident.ByID(order))
 
 	rows, err := query.All(ctx)
