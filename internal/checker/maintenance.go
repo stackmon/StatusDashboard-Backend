@@ -3,7 +3,6 @@ package checker
 import (
 	"context"
 	"fmt"
-	"slices"
 	"time"
 
 	"go.uber.org/zap"
@@ -56,16 +55,12 @@ func (st *MntStatusHistory) setStatus(status event.Status) {
 
 func (ch *Checker) CheckMaintenance() error {
 	ch.log.Info("check maintenances statuses")
-	if ch.lastMntID == 0 {
-		ch.log.Info("no last completed maintenance, starting from the beginning")
-	}
 
-	maintenances, err := ch.db.GetMaintenances(ch.lastMntID)
+	maintenances, err := ch.db.GetMaintenances()
 	if err != nil {
 		return err
 	}
 
-	var activeMaintenances []uint
 	for _, mn := range maintenances {
 		// Draft maintenances are not processed by the checker — they await
 		// manual approval (reviewed) or rejection (cancelled) via the API.
@@ -73,29 +68,11 @@ func (ch *Checker) CheckMaintenance() error {
 			continue
 		}
 
-		if processErr := ch.processMaintenance(mn, &activeMaintenances); processErr != nil {
+		if processErr := ch.processMaintenance(mn); processErr != nil {
 			ch.log.Error("failed to process maintenance",
 				zap.Uint("mntID", mn.ID), zap.Error(processErr))
 			continue
 		}
-	}
-
-	if len(activeMaintenances) == 0 {
-		for _, mn := range maintenances {
-			if mn.ID > ch.lastMntID {
-				ch.lastMntID = mn.ID
-			}
-		}
-		ch.log.Debug(
-			"there are no actual maintenances, set the last ID to the last one",
-			zap.Uint("lastMntID", ch.lastMntID),
-		)
-	} else {
-		ch.lastMntID = slices.Min(activeMaintenances)
-		ch.log.Debug(
-			"set the last ID to the earliest planned or in_progress maintenance",
-			zap.Uint("lastMntID", ch.lastMntID),
-		)
 	}
 
 	ch.log.Info("finished checking maintenances")
@@ -103,7 +80,7 @@ func (ch *Checker) CheckMaintenance() error {
 	return nil
 }
 
-func (ch *Checker) processMaintenance(mn *db.Incident, activeMaintenances *[]uint) error {
+func (ch *Checker) processMaintenance(mn *db.Incident) error {
 	// Refetch immediately before the read-modify-write. The bulk
 	// GetMaintenances above is N items old by the time we reach item N;
 	// using its preloaded state for the version check races concurrent
@@ -141,7 +118,6 @@ func (ch *Checker) processMaintenance(mn *db.Incident, activeMaintenances *[]uin
 		ch.notifier.Notify() // wake the worker after the commit
 	}
 
-	trackActiveMaintenance(actualStatus, mn.ID, activeMaintenances)
 	return nil
 }
 
@@ -158,12 +134,6 @@ func (ch *Checker) evaluateAndFixMntStatus(mn *db.Incident) event.Status {
 	actualStatus := calculateCurrentMntStatus(sHistory, mn)
 	ch.fixMntMissedStatuses(actualStatus, sHistory, mn)
 	return actualStatus
-}
-
-func trackActiveMaintenance(status event.Status, id uint, activeMaintenances *[]uint) {
-	if status == event.MaintenancePlanned || status == event.MaintenanceInProgress {
-		*activeMaintenances = append(*activeMaintenances, id)
-	}
 }
 
 func calculateMntStatusHistory(mn *db.Incident) *MntStatusHistory {
