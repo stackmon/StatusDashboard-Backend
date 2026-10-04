@@ -6,6 +6,6 @@ import (
 	"github.com/stackmon/otc-status-dashboard/ent/incident"
 )
 
-func (db *DB) GetInfoEvents(after uint) ([]*Incident, error) {
-	return db.getEventsByType(incident.TypeInfo, after, entsql.OrderDesc())
+func (db *DB) GetInfoEvents() ([]*Incident, error) {
+	return db.getEventsByType(incident.TypeInfo, entsql.OrderDesc())
 }

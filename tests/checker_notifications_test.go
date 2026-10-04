@@ -11,7 +11,23 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/conf"
 	"github.com/stackmon/otc-status-dashboard/internal/db"
 	"github.com/stackmon/otc-status-dashboard/internal/event"
+	"github.com/stackmon/otc-status-dashboard/internal/notification"
 )
+
+// newTestChecker builds a checker on a fresh pool and a publisher wired to
+// the same pool, mirroring the app's wiring.
+func newTestChecker(t *testing.T) *checker.Checker {
+	t.Helper()
+
+	d, err := db.New(&conf.Config{DB: databaseURL})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+
+	ncfg, err := notification.ConfigFromConf(notifCheckerConfig())
+	require.NoError(t, err)
+
+	return checker.New(d, zap.NewNop(), notification.NewPublisher(ncfg, d))
+}
 
 func notifCheckerConfig() *conf.Config {
 	return &conf.Config{
@@ -40,9 +56,7 @@ func TestChecker_ReviewedToPlanned_EnqueuesStatusChangedToCreator(t *testing.T) 
 	// No outbox rows yet (publisher was off during API calls).
 	require.Equal(t, int64(0), outboxCount(t, g, eventID))
 
-	chk, err := checker.New(notifCheckerConfig(), zap.NewNop())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = chk.Close() })
+	chk := newTestChecker(t)
 
 	require.NoError(t, chk.CheckMaintenance()) // reviewed -> planned
 
@@ -62,9 +76,7 @@ func TestChecker_NoTransition_EnqueuesNothing(t *testing.T) {
 
 	g := openRawDB(t)
 
-	chk, err := checker.New(notifCheckerConfig(), zap.NewNop())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = chk.Close() })
+	chk := newTestChecker(t)
 
 	// Planned with a future start date: the checker computes planned again -> no change.
 	require.NoError(t, chk.CheckMaintenance())

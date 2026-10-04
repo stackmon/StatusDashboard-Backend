@@ -12,3 +12,4 @@ var ErrDBIncidentFilterActiveFalse = errors.New("filter for inactive incidents i
 var ErrVersionConflict = errors.New("version conflict")
 var ErrNotificationSchemaMissing = errors.New(
 	"notification_outbox table is missing: apply the pending database migrations")
+var ErrLockBusy = errors.New("advisory lock is held by another instance")

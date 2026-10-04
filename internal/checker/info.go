@@ -1,7 +1,6 @@
 package checker
 
 import (
-	"slices"
 	"time"
 
 	"go.uber.org/zap"
@@ -48,16 +47,12 @@ func (st *InfoStatusHistory) setStatus(status event.Status) {
 
 func (ch *Checker) CheckInfoEvents() error {
 	ch.log.Info("check info event statuses")
-	if ch.lastInfoID == 0 {
-		ch.log.Info("no last completed info event, starting from the beginning")
-	}
 
-	infos, err := ch.db.GetInfoEvents(ch.lastInfoID)
+	infos, err := ch.db.GetInfoEvents()
 	if err != nil {
 		return err
 	}
 
-	var activeInfoEvents []uint
 	for _, info := range infos {
 		sHistory := calculateInfoStatusHistory(info)
 		actualStatus := calculateCurrentInfoStatus(sHistory, info)
@@ -65,10 +60,8 @@ func (ch *Checker) CheckInfoEvents() error {
 		switch actualStatus {
 		case event.InfoPlanned:
 			ch.fixInfoMissedStatuses(event.InfoPlanned, sHistory, info)
-			activeInfoEvents = append(activeInfoEvents, info.ID)
 		case event.InfoActive:
 			ch.fixInfoMissedStatuses(event.InfoActive, sHistory, info)
-			activeInfoEvents = append(activeInfoEvents, info.ID)
 		case event.InfoCompleted:
 			ch.fixInfoMissedStatuses(event.InfoCompleted, sHistory, info)
 		case event.InfoCancelled:
@@ -84,24 +77,6 @@ func (ch *Checker) CheckInfoEvents() error {
 				return err
 			}
 		}
-	}
-
-	if len(activeInfoEvents) == 0 {
-		for _, mn := range infos {
-			if mn.ID > ch.lastInfoID {
-				ch.lastInfoID = mn.ID
-			}
-		}
-		ch.log.Debug(
-			"there are no actual info events, set the last ID to the last one",
-			zap.Uint("lastInfoID", ch.lastInfoID),
-		)
-	} else {
-		ch.lastInfoID = slices.Min(activeInfoEvents)
-		ch.log.Debug(
-			"set the last ID to the earliest planned or in_progress info event",
-			zap.Uint("lastInfoID", ch.lastInfoID),
-		)
 	}
 
 	ch.log.Info("finished checking info events")

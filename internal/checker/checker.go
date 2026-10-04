@@ -1,40 +1,57 @@
 package checker
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
 
-	"github.com/stackmon/otc-status-dashboard/internal/conf"
 	"github.com/stackmon/otc-status-dashboard/internal/db"
 	"github.com/stackmon/otc-status-dashboard/internal/notification"
 )
 
 const defaultPeriod = time.Minute * 2
 
+// scanLockKey guards the full scan across replicas. It lives in the SD3
+// reserved advisory-lock range 9000-9099; it will move to internal/scheduler
+// when the unified scheduler lands.
+const scanLockKey int64 = 9001
+
 type Checker struct {
 	db       *db.DB
 	log      *zap.Logger
 	notifier *notification.Publisher
-	// lastIDs are the earliest planned or in_progress maintenance/info events ID.
-	lastMntID  uint
-	lastInfoID uint
+	mu       sync.Mutex
+	cancel   context.CancelFunc
+	done     chan struct{}
 }
 
-func New(c *conf.Config, log *zap.Logger) (*Checker, error) {
-	dbNew, err := db.New(c)
-	if err != nil {
-		return nil, err
-	}
-	ncfg, err := notification.ConfigFromConf(c)
-	if err != nil {
-		return nil, err
-	}
-	return &Checker{db: dbNew, log: log, notifier: notification.NewPublisher(ncfg, dbNew)}, nil
+// New builds a Checker on the app's shared database pool and notification
+// publisher. It owns neither: the pool and the publisher are closed and
+// wired by the app.
+func New(database *db.DB, log *zap.Logger, notifier *notification.Publisher) *Checker {
+	return &Checker{db: database, log: log, notifier: notifier, done: make(chan struct{})}
 }
 
 func (ch *Checker) Check() {
+	// One lock per round so only one replica scans at a time; the scan is
+	// idempotent, so a skipped round costs nothing.
+	err := ch.db.WithAdvisoryLock(context.Background(), scanLockKey, func(context.Context) error {
+		ch.runScan()
+		return nil
+	})
+	if errors.Is(err, db.ErrLockBusy) {
+		ch.log.Debug("another replica holds the scan lock, skipping this round")
+		return
+	}
+	if err != nil {
+		ch.log.Error("failed to acquire the scan lock", zap.Error(err))
+	}
+}
+
+func (ch *Checker) runScan() {
 	var wg sync.WaitGroup
 
 	wg.Add(1)
@@ -58,14 +75,21 @@ func (ch *Checker) Check() {
 	wg.Wait()
 }
 
-func (ch *Checker) Run(done chan struct{}) {
+func (ch *Checker) Run() {
 	ch.log.Info("checker is started")
+	ctx, cancel := context.WithCancel(context.Background())
+	ch.mu.Lock()
+	ch.cancel = cancel
+	ch.mu.Unlock()
+	defer cancel()
+
 	ticker := time.NewTicker(defaultPeriod)
 	defer ticker.Stop()
 
 	for { //nolint:nolintlint
 		select {
-		case <-done:
+		case <-ctx.Done():
+			close(ch.done)
 			return
 		case <-ticker.C:
 			ch.Check()
@@ -73,20 +97,16 @@ func (ch *Checker) Run(done chan struct{}) {
 	}
 }
 
-func (ch *Checker) Shutdown(done chan struct{}) error {
+// Shutdown stops the Run loop and waits for it to exit. It is safe to call
+// multiple times and without Run having started.
+func (ch *Checker) Shutdown() {
 	ch.log.Info("start to shutdown checker")
-	done <- struct{}{}
-	close(done)
-	return ch.db.Close()
-}
-
-// Close releases the checker's database pool without going through the Run loop.
-func (ch *Checker) Close() error {
-	return ch.db.Close()
-}
-
-// Publisher returns the checker's notification publisher so the delivery worker's
-// Notify can be wired in during app startup.
-func (ch *Checker) Publisher() *notification.Publisher {
-	return ch.notifier
+	ch.mu.Lock()
+	cancel := ch.cancel
+	ch.mu.Unlock()
+	if cancel == nil {
+		return
+	}
+	cancel()
+	<-ch.done
 }
