@@ -52,7 +52,7 @@ func TestScheduler_RunsTaskOnInterval(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	cancel()
-	s.Stop(context.Background())
+	_ = s.Stop(context.Background())
 
 	assert.GreaterOrEqual(t, locker.lockCount(), 1, "the task must run at least once")
 }
@@ -77,7 +77,7 @@ func TestScheduler_SkipsRoundWhenLockBusy(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	cancel()
-	s.Stop(context.Background())
+	_ = s.Stop(context.Background())
 
 	assert.GreaterOrEqual(t, locker.lockCount(), 1, "the lock must be attempted")
 	assert.Equal(t, 0, calls, "a busy lock must skip the round without running the task")
@@ -102,7 +102,7 @@ func TestScheduler_StopWaitsForInFlightTask(t *testing.T) {
 
 	stopped := make(chan struct{})
 	go func() {
-		s.Stop(context.Background())
+		_ = s.Stop(context.Background())
 		close(stopped)
 	}()
 
@@ -138,7 +138,7 @@ func TestScheduler_KeepsRunningAfterTaskError(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	cancel()
-	s.Stop(context.Background())
+	_ = s.Stop(context.Background())
 
 	assert.GreaterOrEqual(t, calls.Load(), int64(2), "a failing task must not stop the schedule")
 }

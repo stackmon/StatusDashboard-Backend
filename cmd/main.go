@@ -49,7 +49,7 @@ func main() {
 	sched := newScheduler(s, logger)
 	go runServer(s, logger)
 	sched.Run(ctx)
-	workerDone := startWorker(s, ctx)
+	workerDone := startWorker(ctx, s)
 
 	<-ctx.Done()
 	s.Log.Info("shutdown app")
@@ -85,7 +85,7 @@ func runServer(s *app.App, logger *zap.Logger) {
 
 // startWorker runs the notification worker on ctx and returns a channel closed
 // when it has stopped, or nil when notifications are disabled.
-func startWorker(s *app.App, ctx context.Context) chan struct{} {
+func startWorker(ctx context.Context, s *app.App) chan struct{} {
 	w := s.Worker()
 	if w == nil {
 		return nil
@@ -104,13 +104,11 @@ func shutdown(s *app.App, sched *scheduler.Scheduler, logger *zap.Logger, worker
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), taskStopTimeout)
-	defer stopCancel()
-
 	// A scan round holds a dedicated connection, so the pool must outlive the
-	// scheduled work.
-	schedErr := sched.Stop(stopCtx)
-	workerErr := waitWorker(stopCtx, workerDone, logger)
+	// scheduled work. The scheduler and the worker get independent deadlines so
+	// a slow scheduler stop cannot starve the worker wait.
+	schedErr := stopScheduler(sched)
+	workerErr := waitWorker(workerDone, logger)
 
 	if err := s.Shutdown(shutdownCtx); err != nil {
 		logger.Error("app shutdown failed", zap.Error(err))
@@ -127,10 +125,18 @@ func shutdown(s *app.App, sched *scheduler.Scheduler, logger *zap.Logger, worker
 	}
 }
 
-func waitWorker(ctx context.Context, workerDone chan struct{}, logger *zap.Logger) error {
+func stopScheduler(sched *scheduler.Scheduler) error {
+	ctx, cancel := context.WithTimeout(context.Background(), taskStopTimeout)
+	defer cancel()
+	return sched.Stop(ctx)
+}
+
+func waitWorker(workerDone chan struct{}, logger *zap.Logger) error {
 	if workerDone == nil {
 		return nil
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), taskStopTimeout)
+	defer cancel()
 	select {
 	case <-workerDone:
 		return nil
