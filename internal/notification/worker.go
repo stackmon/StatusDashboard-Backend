@@ -16,8 +16,7 @@ const (
 	// claimBatchSize is deliberately 1: the lease starts at claim time but sends are
 	// sequential, so a larger batch would let later rows outlive their lease and be
 	// re-delivered by the stale-recovery path.
-	claimBatchSize    = 1
-	defaultSweepEvery = 5 * time.Minute
+	claimBatchSize = 1
 
 	// retentionAge keeps delivered rows for audit/re-drive, then prunes them so the
 	// outbox (and the ops stat queries over it) stay small. Failed rows are kept.
@@ -26,8 +25,9 @@ const (
 )
 
 // Worker delivers queued outbox rows. On the happy path it is woken by Notify right
-// after a change commits; a low-frequency ticker sweeps for retries and rows orphaned
-// by a crashed pod. Sending happens outside any DB transaction (architecture §5).
+// after a change commits; the scheduler's notify_sweep task drives Drain for retries
+// and rows orphaned by a crashed pod. Sending happens outside any DB transaction
+// (architecture §5).
 type Worker struct {
 	db       *db.DB
 	renderer *Renderer
@@ -40,8 +40,7 @@ type Worker struct {
 	smtpTimeout  time.Duration
 	backoff      func(attempts int) time.Time
 
-	batchSize  int
-	sweepEvery time.Duration
+	batchSize int
 
 	metrics *Metrics
 
@@ -66,7 +65,6 @@ func NewWorker(cfg Config, database *db.DB, sender Sender, log *zap.Logger, metr
 		smtpTimeout:  cfg.Timeout,
 		backoff:      Backoff(cfg.BackoffBase),
 		batchSize:    claimBatchSize,
-		sweepEvery:   defaultSweepEvery,
 		metrics:      metrics,
 		signal:       make(chan struct{}, 1),
 	}, nil
@@ -81,13 +79,14 @@ func (w *Worker) Notify() {
 	}
 }
 
-// Run processes due rows on every signal and on a periodic safety sweep until the
-// context is cancelled. In-flight sends finish before Run returns: the drain runs
-// synchronously, so ctx.Done() is only observed once the current drain has completed.
+// Run drains due rows on every signal until the context is cancelled. It starts
+// with an immediate drain so rows orphaned by a crashed pod are recovered without
+// waiting for the first scheduler sweep. In-flight sends finish before Run returns:
+// the drain runs synchronously, so ctx.Done() is only observed once the current
+// drain has completed.
 func (w *Worker) Run(ctx context.Context) {
 	w.log.Info("notification worker started", zap.String("lease_owner", w.leaseOwner))
-	ticker := time.NewTicker(w.sweepEvery)
-	defer ticker.Stop()
+	w.drainQuietly(ctx)
 
 	for {
 		select {
@@ -96,9 +95,6 @@ func (w *Worker) Run(ctx context.Context) {
 			return
 		case <-w.signal:
 			w.drainQuietly(ctx)
-		case <-ticker.C:
-			w.drainQuietly(ctx)
-			w.runRetention(ctx)
 		}
 	}
 }
@@ -109,17 +105,18 @@ func (w *Worker) drainQuietly(ctx context.Context) {
 	}
 }
 
-// runRetention prunes delivered rows older than retentionAge on the safety sweep.
-func (w *Worker) runRetention(ctx context.Context) {
+// RunRetention prunes delivered rows older than retentionAge. It is the body of
+// the scheduler's retention task, which holds the advisory lock for the round.
+func (w *Worker) RunRetention(ctx context.Context) error {
 	before := time.Now().UTC().Add(-retentionAge)
 	n, err := w.db.DeleteSentBefore(ctx, before, retentionBatch)
-	if err != nil && ctx.Err() == nil {
-		w.log.Error("notification retention failed", zap.Error(err))
-		return
+	if err != nil {
+		return err
 	}
 	if n > 0 {
 		w.log.Info("notification retention pruned sent rows", zap.Int64("count", n))
 	}
+	return nil
 }
 
 // Drain recovers stale rows, then claims and sends batches until none remain due.

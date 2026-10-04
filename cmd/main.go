@@ -14,10 +14,20 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/app"
 	"github.com/stackmon/otc-status-dashboard/internal/checker"
 	"github.com/stackmon/otc-status-dashboard/internal/conf"
+	"github.com/stackmon/otc-status-dashboard/internal/scheduler"
 )
 
-// shutdownTimeout bounds the in-flight request drain after SIGTERM.
-const shutdownTimeout = 15 * time.Second
+const (
+	// shutdownTimeout bounds the in-flight request drain after SIGTERM.
+	shutdownTimeout = 15 * time.Second
+	// taskStopTimeout bounds the wait for in-flight scheduled tasks and the
+	// notification worker during shutdown.
+	taskStopTimeout = 30 * time.Second
+
+	scanInterval      = time.Minute * 2
+	sweepInterval     = time.Minute * 5
+	retentionInterval = time.Hour * 24
+)
 
 func main() {
 	c, err := conf.LoadConf()
@@ -33,35 +43,105 @@ func main() {
 		logger.Fatal("fail to init app", zap.Error(err))
 	}
 
-	ch := checker.New(s.DB, logger, s.Publisher())
-
 	ctx, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer done()
 
-	go func() {
-		if err = s.Run(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Fatal("app is failed to run", zap.Error(err))
-		}
-	}()
-
-	go ch.Run()
+	sched := newScheduler(s, logger)
+	go runServer(s, logger)
+	sched.Run(ctx)
+	workerDone := startWorker(ctx, s)
 
 	<-ctx.Done()
 	s.Log.Info("shutdown app")
+	shutdown(s, sched, logger, workerDone)
+	logger.Info("app exited")
+}
 
-	// Stop the checker before the pool is closed: Check runs synchronously, so
-	// this waits for an in-flight scan to finish before App.Shutdown closes the
-	// database pool.
-	ch.Shutdown()
+// newScheduler registers every periodic task. The advisory lock that keeps a task
+// single-replica is taken by the scheduler, not by the task body.
+func newScheduler(s *app.App, logger *zap.Logger) *scheduler.Scheduler {
+	ch := checker.New(s.DB, logger, s.Publisher())
 
+	sched := scheduler.New(s.DB, logger)
+	sched.Register("scan", scanInterval, scheduler.KeyScan, func(ctx context.Context) error {
+		if err := ch.Check(ctx); err != nil {
+			return err
+		}
+		s.Publisher().Notify()
+		return nil
+	})
+	if w := s.Worker(); w != nil {
+		sched.Register("notify_sweep", sweepInterval, scheduler.KeyNotifySweep, w.Drain)
+		sched.Register("retention", retentionInterval, scheduler.KeyRetention, w.RunRetention)
+	}
+	return sched
+}
+
+func runServer(s *app.App, logger *zap.Logger) {
+	if err := s.Run(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Fatal("app is failed to run", zap.Error(err))
+	}
+}
+
+// startWorker runs the notification worker on ctx and returns a channel closed
+// when it has stopped, or nil when notifications are disabled.
+func startWorker(ctx context.Context, s *app.App) chan struct{} {
+	w := s.Worker()
+	if w == nil {
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		w.Run(ctx)
+		close(done)
+	}()
+	return done
+}
+
+func shutdown(s *app.App, sched *scheduler.Scheduler, logger *zap.Logger, workerDone chan struct{}) {
 	// The signal context is already cancelled, so the shutdown needs its own
 	// deadline to drain in-flight requests.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
-	if err = s.Shutdown(shutdownCtx); err != nil {
+	// A scan round holds a dedicated connection, so the pool must outlive the
+	// scheduled work. The scheduler and the worker get independent deadlines so
+	// a slow scheduler stop cannot starve the worker wait.
+	schedErr := stopScheduler(sched)
+	workerErr := waitWorker(workerDone, logger)
+
+	if err := s.Shutdown(shutdownCtx); err != nil {
 		logger.Error("app shutdown failed", zap.Error(err))
 	}
 
-	logger.Info("app exited")
+	// Never close the pool while in-flight work may still be running.
+	if schedErr != nil || workerErr != nil {
+		logger.Error("in-flight work did not stop before the deadline; leaving the database pool open",
+			zap.Error(errors.Join(schedErr, workerErr)))
+		return
+	}
+	if err := s.DB.Close(); err != nil {
+		logger.Error("database close failed", zap.Error(err))
+	}
+}
+
+func stopScheduler(sched *scheduler.Scheduler) error {
+	ctx, cancel := context.WithTimeout(context.Background(), taskStopTimeout)
+	defer cancel()
+	return sched.Stop(ctx)
+}
+
+func waitWorker(workerDone chan struct{}, logger *zap.Logger) error {
+	if workerDone == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), taskStopTimeout)
+	defer cancel()
+	select {
+	case <-workerDone:
+		return nil
+	case <-ctx.Done():
+		logger.Warn("timed out waiting for the notification worker to stop")
+		return ctx.Err()
+	}
 }
