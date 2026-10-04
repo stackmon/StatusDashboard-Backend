@@ -153,14 +153,13 @@ func (a *App) Run() error {
 	return a.srv.ListenAndServe()
 }
 
+// Shutdown stops the HTTP and metrics listeners. The database pool is owned by
+// the caller: main closes it last, once in-flight work has stopped.
 func (a *App) Shutdown(ctx context.Context) error {
 	if a.metricsSrv != nil {
 		if err := a.metricsSrv.Shutdown(ctx); err != nil {
 			a.Log.Error("metrics server shutdown", zap.Error(err))
 		}
 	}
-	if err := a.srv.Shutdown(ctx); err != nil {
-		return err
-	}
-	return a.DB.Close()
+	return a.srv.Shutdown(ctx)
 }

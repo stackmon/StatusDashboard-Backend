@@ -2,6 +2,7 @@ package checker
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"go.uber.org/zap"
@@ -23,32 +24,40 @@ func New(database *db.DB, log *zap.Logger, notifier *notification.Publisher) *Ch
 	return &Checker{db: database, log: log, notifier: notifier}
 }
 
-// Check runs one full scan. It is the body of the scheduler's scan task,
-// which holds the advisory lock for the whole round.
-func (ch *Checker) Check(ctx context.Context) {
-	if ctx.Err() != nil {
-		return
+// Check runs one full scan and returns the combined error of its two halves. It
+// is the body of the scheduler's scan task, which holds the advisory lock for the
+// whole round. Cancellation is observed only before the round starts: the two
+// scans do not take a context yet, so a caller must not close the pool while
+// Check is running.
+func (ch *Checker) Check(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
-	var wg sync.WaitGroup
+	var (
+		wg      sync.WaitGroup
+		mntErr  error
+		infoErr error
+	)
 
 	wg.Add(1)
 	go func() {
-		err := ch.CheckMaintenance()
-		if err != nil {
+		defer wg.Done()
+		if err := ch.CheckMaintenance(); err != nil {
 			ch.log.Error("error to check maintenances", zap.Error(err))
+			mntErr = err
 		}
-		wg.Done()
 	}()
 
 	wg.Add(1)
 	go func() {
-		err := ch.CheckInfoEvents()
-		if err != nil {
+		defer wg.Done()
+		if err := ch.CheckInfoEvents(); err != nil {
 			ch.log.Error("error to check info events", zap.Error(err))
+			infoErr = err
 		}
-		wg.Done()
 	}()
 
 	wg.Wait()
+	return errors.Join(mntErr, infoErr)
 }

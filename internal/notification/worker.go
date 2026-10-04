@@ -63,9 +63,9 @@ func NewWorker(cfg Config, database *db.DB, sender Sender, log *zap.Logger, metr
 		leaseTimeout: cfg.LeaseTimeout,
 		maxAttempts:  cfg.MaxAttempts,
 		smtpTimeout:  cfg.Timeout,
-		backoff:   Backoff(cfg.BackoffBase),
-		batchSize: claimBatchSize,
-		metrics:   metrics,
+		backoff:      Backoff(cfg.BackoffBase),
+		batchSize:    claimBatchSize,
+		metrics:      metrics,
 		signal:       make(chan struct{}, 1),
 	}, nil
 }

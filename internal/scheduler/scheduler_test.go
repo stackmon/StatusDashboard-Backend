@@ -16,10 +16,10 @@ import (
 
 // fakeLocker records lock acquisitions and can simulate a busy lock.
 type fakeLocker struct {
-	mu     sync.Mutex
-	keys   []int64
-	busy   bool
-	fn     func(ctx context.Context) error
+	mu   sync.Mutex
+	keys []int64
+	busy bool
+	fn   func(ctx context.Context) error
 }
 
 func (f *fakeLocker) WithAdvisoryLock(ctx context.Context, key int64, fn func(context.Context) error) error {

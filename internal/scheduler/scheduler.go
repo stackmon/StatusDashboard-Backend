@@ -47,8 +47,10 @@ func (s *Scheduler) Register(name string, interval time.Duration, key int64, fn 
 	s.tasks = append(s.tasks, Task{Name: name, Interval: interval, Key: key, Fn: fn})
 }
 
-// Run starts one goroutine per registered task. It returns immediately.
+// Run starts one goroutine per registered task. It returns immediately and must
+// be called at most once, before Stop.
 func (s *Scheduler) Run(ctx context.Context) {
+	//nolint:gosec // cancel is stored and invoked by Stop.
 	ctx, s.cancel = context.WithCancel(ctx)
 	for _, t := range s.tasks {
 		s.wg.Add(1)
@@ -82,9 +84,10 @@ func (s *Scheduler) runTask(ctx context.Context, t Task) {
 	}
 }
 
-// Stop cancels the schedule and waits for in-flight tasks to return, bounded
-// by ctx.
-func (s *Scheduler) Stop(ctx context.Context) {
+// Stop cancels the schedule and waits for in-flight tasks to return, bounded by
+// ctx. It reports ctx.Err() when the wait times out so the caller can avoid
+// closing the database pool while a task is still running.
+func (s *Scheduler) Stop(ctx context.Context) error {
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -95,7 +98,9 @@ func (s *Scheduler) Stop(ctx context.Context) {
 	}()
 	select {
 	case <-done:
+		return nil
 	case <-ctx.Done():
 		s.log.Warn("timed out waiting for scheduled tasks to finish")
+		return ctx.Err()
 	}
 }

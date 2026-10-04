@@ -17,12 +17,17 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/scheduler"
 )
 
-// shutdownTimeout bounds the in-flight request drain after SIGTERM.
-const shutdownTimeout = 15 * time.Second
+const (
+	// shutdownTimeout bounds the in-flight request drain after SIGTERM.
+	shutdownTimeout = 15 * time.Second
+	// taskStopTimeout bounds the wait for in-flight scheduled tasks and the
+	// notification worker during shutdown.
+	taskStopTimeout = 30 * time.Second
 
-// taskStopTimeout bounds the wait for in-flight scheduled tasks and the
-// notification worker during shutdown.
-const taskStopTimeout = 30 * time.Second
+	scanInterval      = time.Minute * 2
+	sweepInterval     = time.Minute * 5
+	retentionInterval = time.Hour * 24
+)
 
 func main() {
 	c, err := conf.LoadConf()
@@ -38,67 +43,99 @@ func main() {
 		logger.Fatal("fail to init app", zap.Error(err))
 	}
 
+	ctx, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer done()
+
+	sched := newScheduler(s, logger)
+	go runServer(s, logger)
+	sched.Run(ctx)
+	workerDone := startWorker(s, ctx)
+
+	<-ctx.Done()
+	s.Log.Info("shutdown app")
+	shutdown(s, sched, logger, workerDone)
+	logger.Info("app exited")
+}
+
+// newScheduler registers every periodic task. The advisory lock that keeps a task
+// single-replica is taken by the scheduler, not by the task body.
+func newScheduler(s *app.App, logger *zap.Logger) *scheduler.Scheduler {
 	ch := checker.New(s.DB, logger, s.Publisher())
 
 	sched := scheduler.New(s.DB, logger)
-	sched.Register("scan", 2*time.Minute, scheduler.KeyScan, func(ctx context.Context) error {
-		ch.Check(ctx)
+	sched.Register("scan", scanInterval, scheduler.KeyScan, func(ctx context.Context) error {
+		if err := ch.Check(ctx); err != nil {
+			return err
+		}
 		s.Publisher().Notify()
 		return nil
 	})
 	if w := s.Worker(); w != nil {
-		sched.Register("notify_sweep", 5*time.Minute, scheduler.KeyNotifySweep, w.Drain)
-		sched.Register("retention", 24*time.Hour, scheduler.KeyRetention, w.RunRetention)
+		sched.Register("notify_sweep", sweepInterval, scheduler.KeyNotifySweep, w.Drain)
+		sched.Register("retention", retentionInterval, scheduler.KeyRetention, w.RunRetention)
 	}
+	return sched
+}
 
-	ctx, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer done()
+func runServer(s *app.App, logger *zap.Logger) {
+	if err := s.Run(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Fatal("app is failed to run", zap.Error(err))
+	}
+}
 
+// startWorker runs the notification worker on ctx and returns a channel closed
+// when it has stopped, or nil when notifications are disabled.
+func startWorker(s *app.App, ctx context.Context) chan struct{} {
+	w := s.Worker()
+	if w == nil {
+		return nil
+	}
+	done := make(chan struct{})
 	go func() {
-		if err = s.Run(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Fatal("app is failed to run", zap.Error(err))
-		}
+		w.Run(ctx)
+		close(done)
 	}()
+	return done
+}
 
-	sched.Run(ctx)
-
-	var workerDone chan struct{}
-	if w := s.Worker(); w != nil {
-		workerDone = make(chan struct{})
-		go func() {
-			w.Run(ctx)
-			close(workerDone)
-		}()
-	}
-
-	<-ctx.Done()
-	s.Log.Info("shutdown app")
-
+func shutdown(s *app.App, sched *scheduler.Scheduler, logger *zap.Logger, workerDone chan struct{}) {
 	// The signal context is already cancelled, so the shutdown needs its own
 	// deadline to drain in-flight requests.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
-	// Stop the scheduler before the pool is closed: a scan round holds a
-	// dedicated connection, so the pool must stay open until in-flight tasks
-	// finish.
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), taskStopTimeout)
 	defer stopCancel()
-	sched.Stop(stopCtx)
 
-	// The worker's context is the signal context, already cancelled; wait for
-	// its in-flight drain to finish before the pool is closed.
-	if workerDone != nil {
-		select {
-		case <-workerDone:
-		case <-stopCtx.Done():
-			logger.Warn("timed out waiting for the notification worker to stop")
-		}
-	}
+	// A scan round holds a dedicated connection, so the pool must outlive the
+	// scheduled work.
+	schedErr := sched.Stop(stopCtx)
+	workerErr := waitWorker(stopCtx, workerDone, logger)
 
-	if err = s.Shutdown(shutdownCtx); err != nil {
+	if err := s.Shutdown(shutdownCtx); err != nil {
 		logger.Error("app shutdown failed", zap.Error(err))
 	}
 
-	logger.Info("app exited")
+	// Never close the pool while in-flight work may still be running.
+	if schedErr != nil || workerErr != nil {
+		logger.Error("in-flight work did not stop before the deadline; leaving the database pool open",
+			zap.Error(errors.Join(schedErr, workerErr)))
+		return
+	}
+	if err := s.DB.Close(); err != nil {
+		logger.Error("database close failed", zap.Error(err))
+	}
+}
+
+func waitWorker(ctx context.Context, workerDone chan struct{}, logger *zap.Logger) error {
+	if workerDone == nil {
+		return nil
+	}
+	select {
+	case <-workerDone:
+		return nil
+	case <-ctx.Done():
+		logger.Warn("timed out waiting for the notification worker to stop")
+		return ctx.Err()
+	}
 }
