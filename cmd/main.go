@@ -46,6 +46,11 @@ func main() {
 	<-ctx.Done()
 	s.Log.Info("shutdown app")
 
+	// Stop the checker before the pool is closed: Check runs synchronously, so
+	// this waits for an in-flight scan to finish before App.Shutdown closes the
+	// database pool.
+	ch.Shutdown()
+
 	// The signal context is already cancelled, so the shutdown needs its own
 	// deadline to drain in-flight requests.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -54,8 +59,6 @@ func main() {
 	if err = s.Shutdown(shutdownCtx); err != nil {
 		logger.Error("app shutdown failed", zap.Error(err))
 	}
-
-	ch.Shutdown()
 
 	logger.Info("app exited")
 }
