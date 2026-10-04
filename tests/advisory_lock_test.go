@@ -55,11 +55,11 @@ func TestWithAdvisoryLock_ConcurrentHolders(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
+	for range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := 0; i < 3; i++ {
+			for range 3 {
 				err := run()
 				if err != nil && !errors.Is(err, db.ErrLockBusy) {
 					t.Error(err)
@@ -92,7 +92,7 @@ func TestWithAdvisoryLock_ReleasedAfterCancelledFn(t *testing.T) {
 		cancel()
 		return context.Canceled
 	})
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 
 	// The lock must have been released despite the cancelled context.
 	err = d.WithAdvisoryLock(context.Background(), 9001, func(context.Context) error {
