@@ -223,7 +223,7 @@ func TestV2PostEventsHandler(t *testing.T) {
 	assert.Len(t, oldIncident.Updates, 3)
 	t.Logf("STATUS updates: %v", oldIncident.Updates)
 	assert.Equal(t, event.IncidentDetected, oldIncident.Updates[0].Status)
-	assert.Equal(t, event.OutDatedSystem, oldIncident.Updates[1].Status)
+	assert.Equal(t, event.IncidentResolved, oldIncident.Updates[1].Status)
 	assert.Equal(t, event.IncidentResolved, oldIncident.Updates[2].Status)
 	assert.Equal(t, "The incident is detected.", oldIncident.Updates[0].Text)
 	assert.Equal(t, fmt.Sprintf("Cloud Container Engine (Container, EU-DE, cce) moved to <a href='/incidents/%d'>Test incident creation for api V2 for components: 1, 2. Test should close previous and move components to the new.</a>", result.Result[0].IncidentID), oldIncident.Updates[1].Text)

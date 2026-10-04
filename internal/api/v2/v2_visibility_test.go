@@ -21,21 +21,21 @@ func TestMapEventUpdates_FiltersInternalStatuses(t *testing.T) {
 	}
 
 	t.Run("authenticated sees all statuses", func(t *testing.T) {
-		updates, _ := mapEventUpdates(statuses, true, nil, event.TypeMaintenance)
+		updates, _ := mapEventUpdates(statuses, true, event.MaintenancePlanned, nil, event.TypeMaintenance)
 		assert.Len(t, updates, 4)
 		assert.Equal(t, "pending_review", string(updates[0].Status))
 		assert.Equal(t, "reviewed", string(updates[1].Status))
 	})
 
 	t.Run("unauthenticated sees only public statuses", func(t *testing.T) {
-		updates, _ := mapEventUpdates(statuses, false, nil, event.TypeMaintenance)
+		updates, _ := mapEventUpdates(statuses, false, event.MaintenancePlanned, nil, event.TypeMaintenance)
 		assert.Len(t, updates, 2)
 		assert.Equal(t, "planned", string(updates[0].Status))
 		assert.Equal(t, "in_progress", string(updates[1].Status))
 	})
 
 	t.Run("IDs are sequential after filtering", func(t *testing.T) {
-		updates, _ := mapEventUpdates(statuses, false, nil, event.TypeMaintenance)
+		updates, _ := mapEventUpdates(statuses, false, event.MaintenancePlanned, nil, event.TypeMaintenance)
 		for i, u := range updates {
 			assert.Equal(t, i, u.ID)
 		}
@@ -53,7 +53,7 @@ func TestMapEventUpdates_DescriptionRows(t *testing.T) {
 	}
 
 	t.Run("description rows are removed and latest text is returned", func(t *testing.T) {
-		updates, description := mapEventUpdates(statuses, true, nil, event.TypeMaintenance)
+		updates, description := mapEventUpdates(statuses, true, event.MaintenancePlanned, nil, event.TypeMaintenance)
 		assert.Len(t, updates, 2)
 		assert.Equal(t, "planned", string(updates[0].Status))
 		assert.Equal(t, "in_progress", string(updates[1].Status))
@@ -61,15 +61,15 @@ func TestMapEventUpdates_DescriptionRows(t *testing.T) {
 	})
 
 	t.Run("IDs are sequential after description removal", func(t *testing.T) {
-		updates, _ := mapEventUpdates(statuses, false, nil, event.TypeMaintenance)
+		updates, _ := mapEventUpdates(statuses, false, event.MaintenancePlanned, nil, event.TypeMaintenance)
 		for i, u := range updates {
 			assert.Equal(t, i, u.ID)
 		}
 	})
 
 	t.Run("no description rows returns empty description", func(t *testing.T) {
-		_, description := mapEventUpdates(statuses[:1], true, nil, event.TypeMaintenance)
-		assert.Equal(t, "", description)
+		_, description := mapEventUpdates(statuses[:1], true, event.MaintenancePlanned, nil, event.TypeMaintenance)
+		assert.Empty(t, description)
 	})
 }
 
@@ -83,7 +83,7 @@ func TestMapEventUpdates_NormalizesStatuses(t *testing.T) {
 		{ID: 3, Status: "scheduled", Text: "Scheduled", Timestamp: testTime},
 	}
 
-	updates, _ := mapEventUpdates(statuses, true, &endDate, event.TypeMaintenance)
+	updates, _ := mapEventUpdates(statuses, true, event.MaintenancePlanned, &endDate, event.TypeMaintenance)
 	assert.Equal(t, "analysing", string(updates[0].Status))
 	assert.Equal(t, "in_progress", string(updates[1].Status))
 	assert.Equal(t, "planned", string(updates[2].Status))
@@ -98,11 +98,23 @@ func TestMapEventUpdates_ChangedStatusesKeepPrevious(t *testing.T) {
 		{ID: 3, Status: "changed", Text: "Changed", Timestamp: testTime},
 	}
 
-	updates, _ := mapEventUpdates(statuses, true, nil, event.TypeIncident)
+	updates, _ := mapEventUpdates(statuses, true, event.IncidentAnalysing, nil, event.TypeIncident)
 	assert.Len(t, updates, 3)
 	assert.Equal(t, "analysing", string(updates[0].Status))
 	assert.Equal(t, "analysing", string(updates[1].Status))
 	assert.Equal(t, "analysing", string(updates[2].Status))
+}
+
+func TestMapEventUpdates_LeadingChangedUsesEventStatus(t *testing.T) {
+	testTime := time.Now().UTC()
+
+	statuses := []db.IncidentStatus{
+		{ID: 1, Status: "changed", Text: "Changed", Timestamp: testTime},
+	}
+
+	updates, _ := mapEventUpdates(statuses, true, event.IncidentResolved, nil, event.TypeIncident)
+	assert.Len(t, updates, 1)
+	assert.Equal(t, event.IncidentResolved, updates[0].Status)
 }
 
 func TestNormalizeStatus(t *testing.T) {
@@ -120,7 +132,7 @@ func TestNormalizeStatus(t *testing.T) {
 		{name: "scheduled to planned", raw: "scheduled", want: event.MaintenancePlanned},
 		{name: "SYSTEM incident with end date", raw: event.OutDatedSystem, endDate: &endDate, eventType: event.TypeIncident, want: event.IncidentResolved},
 		{name: "SYSTEM maintenance with end date", raw: event.OutDatedSystem, endDate: &endDate, eventType: event.TypeMaintenance, want: event.MaintenanceCompleted},
-		{name: "SYSTEM info with end date", raw: event.OutDatedSystem, endDate: &endDate, eventType: event.TypeInformation, want: event.MaintenanceCompleted},
+		{name: "SYSTEM info with end date", raw: event.OutDatedSystem, endDate: &endDate, eventType: event.TypeInformation, want: event.InfoCompleted},
 		{name: "SYSTEM without end date passes through", raw: event.OutDatedSystem, want: event.OutDatedSystem},
 		{name: "changed passes through", raw: event.IncidentChanged, want: event.IncidentChanged},
 		{name: "impact changed passes through", raw: event.IncidentImpactChanged, want: event.IncidentImpactChanged},

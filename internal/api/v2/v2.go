@@ -330,7 +330,7 @@ func toAPIEvent(inc *db.Incident, isAuth bool) *Incident {
 		components[i] = int(comp.ID)
 	}
 
-	updates, latestDescription := mapEventUpdates(inc.Statuses, isAuth, inc.EndDate, inc.Type)
+	updates, latestDescription := mapEventUpdates(inc.Statuses, isAuth, inc.Status, inc.EndDate, inc.Type)
 
 	var description string
 	if latestDescription != "" {
@@ -1855,17 +1855,27 @@ func PatchEventUpdateTextHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerF
 // mapEventUpdates maps stored status rows to the API updates array. Rows with
 // status "description" are not status entries: they are dropped from the array
 // and the latest one is returned as the event description.
-func mapEventUpdates(statuses []db.IncidentStatus, isAuth bool, endDate *time.Time, eventType string) ([]EventUpdateData, string) {
+// statusDescription marks an update row that carries a description change rather
+// than a status change; the API folds it into the event description field.
+const statusDescription event.Status = "description"
+
+func mapEventUpdates(
+	statuses []db.IncidentStatus, isAuth bool, eventStatus event.Status,
+	endDate *time.Time, eventType string,
+) ([]EventUpdateData, string) {
 	updates := make([]EventUpdateData, 0, len(statuses))
 	idx := 0
 	var latestDescription string
-	var lastStatus event.Status
+	// "changed" and "impact changed" are not status changes: they collapse to the
+	// previous normalized status. Seeding that with the event status keeps a
+	// leading such row from collapsing to an empty value.
+	lastStatus := normalizeStatus(eventStatus, endDate, eventType)
 	for _, s := range statuses {
-		if s.Status == event.Status("description") {
-			latestDescription = s.Text
+		if !isAuth && isInternalStatus(s.Status) {
 			continue
 		}
-		if !isAuth && isInternalStatus(s.Status) {
+		if s.Status == statusDescription {
+			latestDescription = s.Text
 			continue
 		}
 		status := normalizeStatus(s.Status, endDate, eventType)
@@ -1887,8 +1897,8 @@ func mapEventUpdates(statuses []db.IncidentStatus, isAuth bool, endDate *time.Ti
 
 // normalizeStatus maps non-canonical status values stored in the database to
 // their canonical form. "changed" and "impact changed" are not status changes;
-// they are passed through and replaced by the previous normalized status in
-// the updates sequence so the history does not show a spurious jump.
+// they are passed through and collapsed to the previous status in the updates
+// sequence so the history shows no spurious jump.
 func normalizeStatus(raw event.Status, endDate *time.Time, eventType string) event.Status {
 	switch raw {
 	case "analyzing":
@@ -1901,10 +1911,14 @@ func normalizeStatus(raw event.Status, endDate *time.Time, eventType string) eve
 		if endDate == nil {
 			return raw
 		}
-		if eventType == event.TypeIncident {
+		switch eventType {
+		case event.TypeIncident:
 			return event.IncidentResolved
+		case event.TypeInformation:
+			return event.InfoCompleted
+		default:
+			return event.MaintenanceCompleted
 		}
-		return event.MaintenanceCompleted
 	default:
 		return raw
 	}
