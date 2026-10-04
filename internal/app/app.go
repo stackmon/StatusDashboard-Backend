@@ -36,9 +36,9 @@ type App struct {
 	srv *http.Server
 	// metrics server, listening on its own port (nil when notifications are disabled)
 	metricsSrv *http.Server
-	// notification delivery worker (nil when notifications are disabled)
-	worker       *notification.Worker
-	workerCancel context.CancelFunc
+	// notification delivery worker (nil when notifications are disabled); its
+	// lifecycle is owned by main, not by the app
+	worker *notification.Worker
 }
 
 func New(c *conf.Config, log *zap.Logger) (*App, error) {
@@ -128,6 +128,13 @@ func (a *App) NotifyFunc() func() {
 	return a.worker.Notify
 }
 
+// Worker returns the notification delivery worker, or nil when notifications are
+// disabled. main owns its lifecycle: start it before the scheduler and stop it
+// before the database pool is closed.
+func (a *App) Worker() *notification.Worker {
+	return a.worker
+}
+
 // Publisher returns the app's notification publisher, already wired to the
 // delivery worker's Notify.
 func (a *App) Publisher() *notification.Publisher {
@@ -135,11 +142,6 @@ func (a *App) Publisher() *notification.Publisher {
 }
 
 func (a *App) Run() error {
-	if a.worker != nil {
-		var ctx context.Context
-		ctx, a.workerCancel = context.WithCancel(context.Background())
-		go a.worker.Run(ctx)
-	}
 	if a.metricsSrv != nil {
 		go func() {
 			a.Log.Info("metrics server started", zap.String("addr", a.metricsSrv.Addr))
@@ -152,9 +154,6 @@ func (a *App) Run() error {
 }
 
 func (a *App) Shutdown(ctx context.Context) error {
-	if a.workerCancel != nil {
-		a.workerCancel()
-	}
 	if a.metricsSrv != nil {
 		if err := a.metricsSrv.Shutdown(ctx); err != nil {
 			a.Log.Error("metrics server shutdown", zap.Error(err))
