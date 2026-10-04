@@ -664,7 +664,7 @@ func TestV2PatchIncidentHandler(t *testing.T) {
 
 	inc = internalPatch(incID, &pData)
 	assert.Equal(t, startDate.Truncate(time.Microsecond), inc.StartDate)
-	assert.Equal(t, event.IncidentChanged, inc.Status)
+	assert.Equal(t, event.IncidentResolved, inc.Status, "changing dates on a closed incident keeps the resolved status")
 	require.NotNil(t, inc.EndDate)
 	assert.Equal(t, endDate.Truncate(time.Microsecond), inc.EndDate.Truncate(time.Microsecond))
 
