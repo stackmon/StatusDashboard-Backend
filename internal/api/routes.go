@@ -16,6 +16,7 @@ const (
 // returned so that a misconfigured deployment fails at boot instead of serving
 // 500s on the first request.
 func (a *API) InitRoutes(openAPISpecPath string) error {
+	a.initHealthRoutes()
 	a.initV2Routes()
 	a.initRSSRoutes()
 

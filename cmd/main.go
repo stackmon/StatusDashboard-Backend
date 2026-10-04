@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -45,8 +46,13 @@ func main() {
 	<-ctx.Done()
 	s.Log.Info("shutdown app")
 
-	if err = s.Shutdown(ctx); err != nil {
-		logger.Fatal("app shutdown failed", zap.Error(err))
+	// The signal context is already cancelled, so the shutdown needs its own
+	// deadline to drain in-flight requests.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err = s.Shutdown(shutdownCtx); err != nil {
+		logger.Error("app shutdown failed", zap.Error(err))
 	}
 
 	ch.Shutdown()

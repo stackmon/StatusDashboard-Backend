@@ -59,6 +59,10 @@ func (db *DB) Close() error {
 	return db.sql.Close()
 }
 
+func (db *DB) Ping(ctx context.Context) error {
+	return db.sql.PingContext(ctx)
+}
+
 type IncidentsParams struct {
 	Types        []string
 	Status       *event.Status
