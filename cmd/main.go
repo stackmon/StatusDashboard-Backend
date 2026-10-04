@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -14,6 +15,9 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/checker"
 	"github.com/stackmon/otc-status-dashboard/internal/conf"
 )
+
+// shutdownTimeout bounds the in-flight request drain after SIGTERM.
+const shutdownTimeout = 15 * time.Second
 
 func main() {
 	c, err := conf.LoadConf()
@@ -45,11 +49,19 @@ func main() {
 	<-ctx.Done()
 	s.Log.Info("shutdown app")
 
-	if err = s.Shutdown(ctx); err != nil {
-		logger.Fatal("app shutdown failed", zap.Error(err))
-	}
-
+	// Stop the checker before the pool is closed: Check runs synchronously, so
+	// this waits for an in-flight scan to finish before App.Shutdown closes the
+	// database pool.
 	ch.Shutdown()
+
+	// The signal context is already cancelled, so the shutdown needs its own
+	// deadline to drain in-flight requests.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	if err = s.Shutdown(shutdownCtx); err != nil {
+		logger.Error("app shutdown failed", zap.Error(err))
+	}
 
 	logger.Info("app exited")
 }

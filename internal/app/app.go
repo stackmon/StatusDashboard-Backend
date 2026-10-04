@@ -160,6 +160,8 @@ func (a *App) Shutdown(ctx context.Context) error {
 			a.Log.Error("metrics server shutdown", zap.Error(err))
 		}
 	}
-	// TODO: add a proper shutdown for a database
-	return a.srv.Shutdown(ctx)
+	if err := a.srv.Shutdown(ctx); err != nil {
+		return err
+	}
+	return a.DB.Close()
 }
