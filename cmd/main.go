@@ -29,22 +29,7 @@ func main() {
 		logger.Fatal("fail to init app", zap.Error(err))
 	}
 
-	ch, err := checker.New(c, logger)
-	if err != nil {
-		logger.Error("fail to init checker", zap.Error(err))
-	}
-
-	// Wire the checker's publisher to the app's single delivery worker so
-	// checker-driven transitions wake it immediately (same shared queue).
-	if ch != nil {
-		// NotifyFunc is nil when notifications are disabled; leave the publisher
-		// unwired rather than installing a nil callback.
-		if notify := s.NotifyFunc(); notify != nil {
-			ch.Publisher().SetNotify(notify)
-		}
-	}
-
-	stopCh := make(chan struct{})
+	ch := checker.New(s.DB, logger, s.Publisher())
 
 	ctx, done := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer done()
@@ -55,9 +40,7 @@ func main() {
 		}
 	}()
 
-	go func() {
-		ch.Run(stopCh)
-	}()
+	go ch.Run()
 
 	<-ctx.Done()
 	s.Log.Info("shutdown app")
@@ -66,9 +49,7 @@ func main() {
 		logger.Fatal("app shutdown failed", zap.Error(err))
 	}
 
-	if err = ch.Shutdown(stopCh); err != nil {
-		logger.Fatal("checker shutdown failed", zap.Error(err))
-	}
+	ch.Shutdown()
 
 	logger.Info("app exited")
 }

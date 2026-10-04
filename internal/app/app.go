@@ -120,12 +120,18 @@ func buildWorker(
 }
 
 // NotifyFunc returns the worker's wake-up callback, or nil when notifications are
-// disabled. Used to wire the checker's publisher to the same worker.
+// disabled.
 func (a *App) NotifyFunc() func() {
 	if a.worker == nil {
 		return nil
 	}
 	return a.worker.Notify
+}
+
+// Publisher returns the app's notification publisher, already wired to the
+// delivery worker's Notify.
+func (a *App) Publisher() *notification.Publisher {
+	return a.api.Publisher()
 }
 
 func (a *App) Run() error {
