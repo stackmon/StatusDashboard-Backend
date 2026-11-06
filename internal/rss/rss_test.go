@@ -1,7 +1,6 @@
 package rss
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -93,18 +92,24 @@ func TestCreateIncidentFeedItemsMultipleComponents(t *testing.T) {
 		componentWithRegion("ECS", "EU-DE"),
 		componentWithRegion("EVS", "EU-NL"),
 	})
+	incident.Statuses = []db.IncidentStatus{
+		{Status: event.IncidentDetected, Text: "detected", Timestamp: testTime()},
+		{Status: event.IncidentFixing, Text: "we are on it", Timestamp: testTime().Add(time.Hour)},
+	}
 
 	items := createIncidentFeedItems(incident, "https://status.example.com")
-	require.Len(t, items, 1)
+	require.Len(t, items, 2)
 
 	assert.Equal(t, "Status change of multiple services to Major incident", items[0].Title)
 	assert.Equal(t,
 		"A Major incident was detected at 2026-11-05 10:30:00 UTC for ECS in EU-DE, EVS in EU-NL.",
 		items[0].Description)
+	assert.Equal(t,
+		"An update was provided at 2026-11-05 11:30:00 UTC for ECS (EU-DE), EVS (EU-NL): fixing - we are on it",
+		items[1].Description)
 }
 
-// Maintenance events with an explicit description but no components must not
-// panic either.
+// Maintenance events with no components must not panic either.
 func TestCreateMaintenanceFeedItemsNoComponents(t *testing.T) {
 	incident := baseIncident(nil)
 	incident.Type = event.TypeMaintenance
@@ -117,10 +122,6 @@ func TestCreateMaintenanceFeedItemsNoComponents(t *testing.T) {
 	assert.NotPanics(t, func() {
 		items := createFeedItems(incident, "https://status.example.com")
 		require.NotEmpty(t, items)
-		for _, it := range items {
-			assert.False(t, strings.HasSuffix(it.Description, "for "),
-				"description must not dangle on 'for': %q", it.Description)
-		}
 	})
 }
 

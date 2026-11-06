@@ -247,7 +247,7 @@ func createIncidentFeedItems(incident *db.Incident, baseURL string) []*feeds.Ite
 			for _, c := range incident.Components {
 				d += fmt.Sprintf(" %s (%s),", c.Name, c.Region())
 			}
-			d = strings.TrimSuffix(d, ",")
+			d = strings.TrimSuffix(d, ",") + ":"
 		default:
 			d += fmt.Sprintf(" for %s in %s:",
 				incident.Components[0].Name, incident.Components[0].Region())
