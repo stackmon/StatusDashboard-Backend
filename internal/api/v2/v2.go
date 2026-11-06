@@ -1473,6 +1473,22 @@ type MonthlyAvailability struct {
 	Percentage float64 `json:"percentage"` // Percent (0 - 100 / example: 95.23478)
 }
 
+// toAPIComponent maps a component from the database layer to the API response
+// model. Attributes is always a non-nil slice so that the required JSON field
+// is present as [] even when the component has no attribute rows.
+func toAPIComponent(comp db.Component) Component {
+	attrs := make([]ComponentAttribute, len(comp.Attrs))
+	for i, attr := range comp.Attrs {
+		attrs[i] = ComponentAttribute{Name: attr.Name, Value: attr.Value}
+	}
+
+	return Component{
+		ComponentID: ComponentID{ID: int(comp.ID)},
+		Attributes:  attrs,
+		Name:        comp.Name,
+	}
+}
+
 func GetComponentsHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		logger.Debug("retrieve components")
@@ -1483,7 +1499,12 @@ func GetComponentsHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 			return
 		}
 
-		c.JSON(http.StatusOK, r)
+		components := make([]Component, len(r))
+		for i := range r {
+			components[i] = toAPIComponent(r[i])
+		}
+
+		c.JSON(http.StatusOK, components)
 	}
 }
 
@@ -1507,7 +1528,7 @@ func GetComponentHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 			return
 		}
 
-		c.JSON(http.StatusOK, r)
+		c.JSON(http.StatusOK, toAPIComponent(*r))
 	}
 }
 

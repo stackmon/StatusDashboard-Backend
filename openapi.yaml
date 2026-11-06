@@ -516,7 +516,9 @@ components:
           type: string
           example: "Object Storage Service"
         attributes:
-          $ref: "#/components/schemas/ComponentAttr"
+          type: array
+          items:
+            $ref: "#/components/schemas/ComponentAttr"
     ComponentAttr:
       type: object
       properties:
