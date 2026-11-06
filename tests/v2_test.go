@@ -138,6 +138,58 @@ func TestV2GetComponentsHandler(t *testing.T) {
 	}
 }
 
+// TestV2GetComponentsAlwaysIncludesAttributes guards the API contract for
+// legacy components that have no rows in component_attribute: the required
+// attributes field must still be present (as an empty array).
+func TestV2GetComponentsAlwaysIncludesAttributes(t *testing.T) {
+	r := initTests(t)
+	sqlDB := openRawDB(t)
+
+	var id int
+	require.NoError(t, sqlDB.QueryRow(
+		`INSERT INTO component (name) VALUES ('Legacy Component Without Attributes') RETURNING id`,
+	).Scan(&id))
+	t.Cleanup(func() {
+		_, err := sqlDB.Exec(`DELETE FROM component WHERE id = $1`, id)
+		require.NoError(t, err)
+	})
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/v2/components", nil)
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var components []struct {
+		ID         int             `json:"id"`
+		Name       string          `json:"name"`
+		Attributes json.RawMessage `json:"attributes"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &components))
+
+	found := false
+	for _, comp := range components {
+		if comp.ID != id {
+			continue
+		}
+		found = true
+		require.NotNil(t, comp.Attributes, "attributes must be present for component %d", id)
+		require.JSONEq(t, `[]`, string(comp.Attributes))
+	}
+	require.True(t, found, "component %d not found in response", id)
+
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest(http.MethodGet, fmt.Sprintf("/v2/components/%d", id), nil)
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var single struct {
+		Attributes json.RawMessage `json:"attributes"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &single))
+	require.NotNil(t, single.Attributes, "attributes must be present for component %d", id)
+	require.JSONEq(t, `[]`, string(single.Attributes))
+}
+
 func TestV2PostIncidentsHandlerNegative(t *testing.T) {
 	t.Log("start to test incident creation and check json data for /v2/incidents")
 	r := initTests(t)
