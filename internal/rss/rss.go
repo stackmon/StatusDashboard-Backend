@@ -186,24 +186,34 @@ func createIncidentFeedItems(incident *db.Incident, baseURL string) []*feeds.Ite
 
 	impact := getIncidentImpactsStr(*incident.Impact)
 
+	// Events may have no components (e.g. synthetic system events), so the
+	// title and description must not assume the component list is non-empty.
 	var title string
-	if len(incident.Components) > 1 {
-		title = fmt.Sprintf("Status change of multiple services to %s", impact)
-	} else {
+	switch len(incident.Components) {
+	case 0:
+		title = fmt.Sprintf("Status change to %s", impact)
+	case 1:
 		title = fmt.Sprintf("%s status changed to %s", incident.Components[0].Name, impact)
+	default:
+		title = fmt.Sprintf("Status change of multiple services to %s", impact)
 	}
 
 	var description strings.Builder
 	startDate := *incident.StartDate
-	fmt.Fprintf(&description, "A %s was detected at %s UTC for ", impact, startDate.Format(time.DateTime))
 
-	for i := range len(incident.Components) {
-		c := incident.Components[i]
-		fmt.Fprintf(&description, "%s in %s", c.Name, c.Region())
-		if i != len(incident.Components)-1 {
-			description.WriteString(", ")
-		} else {
-			description.WriteString(".")
+	if len(incident.Components) == 0 {
+		fmt.Fprintf(&description, "A %s was detected at %s UTC.", impact, startDate.Format(time.DateTime))
+	} else {
+		fmt.Fprintf(&description, "A %s was detected at %s UTC for ", impact, startDate.Format(time.DateTime))
+
+		for i := range len(incident.Components) {
+			c := incident.Components[i]
+			fmt.Fprintf(&description, "%s in %s", c.Name, c.Region())
+			if i != len(incident.Components)-1 {
+				description.WriteString(", ")
+			} else {
+				description.WriteString(".")
+			}
 		}
 	}
 
@@ -228,17 +238,21 @@ func createIncidentFeedItems(incident *db.Incident, baseURL string) []*feeds.Ite
 			continue
 		}
 
-		d := fmt.Sprintf("An update was provided at %s UTC for ", s.Timestamp.Format(time.DateTime))
-		if len(incident.Components) > 1 {
+		d := fmt.Sprintf("An update was provided at %s UTC", s.Timestamp.Format(time.DateTime))
+		switch {
+		case len(incident.Components) == 0:
+			d += ":"
+		case len(incident.Components) > 1:
+			d += " for"
 			for _, c := range incident.Components {
-				d += fmt.Sprintf("%s (%s), ", c.Name, c.Region())
+				d += fmt.Sprintf(" %s (%s),", c.Name, c.Region())
 			}
-			d = strings.TrimSuffix(d, ", ")
-		} else {
-			d += fmt.Sprintf("%s in %s", incident.Components[0].Name, incident.Components[0].Region())
+			d = strings.TrimSuffix(d, ",")
+		default:
+			d += fmt.Sprintf(" for %s in %s:",
+				incident.Components[0].Name, incident.Components[0].Region())
 		}
-
-		d += fmt.Sprintf(": %s - %s", s.Status, s.Text)
+		d += fmt.Sprintf(" %s - %s", s.Status, s.Text)
 
 		upd := &feeds.Item{
 			Title:       fmt.Sprintf("Update published for: %s", *incident.Text),
