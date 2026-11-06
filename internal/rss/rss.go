@@ -2,11 +2,13 @@ package rss
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/feeds"
@@ -60,6 +62,13 @@ func HandleRSS(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 			return
 		}
 
+		// Postgres rejects NUL bytes and invalid UTF-8 in text values; reject
+		// such filter input here instead of surfacing raw database errors.
+		if strings.ContainsRune(componentName, 0) || !utf8.ValidString(componentName) {
+			apiErrors.RaiseBadRequestErr(c, errRSSWrongParams)
+			return
+		}
+
 		baseURL := fmt.Sprintf("%s://%s", c.Request.URL.Scheme, c.Request.Host)
 		params := feedParams{
 			region:        region,
@@ -68,7 +77,9 @@ func HandleRSS(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 
 		events, err := getEvents(c.Request.Context(), dbInst, logger, params, maxEvents)
 		if err != nil {
-			if componentName != "" {
+			// Only static, expected errors may reach the client; raw database
+			// errors (e.g. SQLSTATE details) must not be echoed back.
+			if componentName != "" && errors.Is(err, db.ErrDBComponentDSNotExist) {
 				apiErrors.RaiseStatusNotFoundErr(c, err)
 				return
 			}
