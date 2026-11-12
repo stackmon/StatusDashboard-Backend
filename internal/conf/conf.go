@@ -545,14 +545,23 @@ func maskSecret(s string) string {
 	return "<hidden>"
 }
 
+// unparsableDSN replaces a DSN the sanitizer cannot render. A partial parse of a
+// DSN it does not understand can echo the password, so such a value is dropped
+// as a whole.
+const unparsableDSN = "<unparsable dsn>"
+
 func sanitizeDBString(dbURL string) string {
 	if dbURL == "" {
 		return ""
 	}
+
+	// Only a URL-style DSN is rendered, and only without its user info. A
+	// key/value DSN parses without error but keeps the password in the path.
 	u, err := url.Parse(dbURL)
-	if err != nil {
-		return dbURL
+	if err != nil || !strings.Contains(dbURL, "://") {
+		return unparsableDSN
 	}
+
 	return fmt.Sprintf("%s://%s%s",
 		u.Scheme,
 		u.Host,
