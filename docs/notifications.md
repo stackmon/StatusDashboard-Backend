@@ -57,7 +57,10 @@ The creator address (`contact_email` on the event) is subject to:
   from every recipient list, including the review audience. This cannot be bypassed by passing
   the address as `contact_email`.
 
-All addresses are normalised (trimmed, lowercased) and deduplicated before enqueuing.
+All addresses are normalised before enqueuing: a display name (`Name <addr>`) is dropped, case and
+a trailing dot on the domain are ignored, and a `+tag` in the local part is ignored when comparing
+against the exclusion list, the domain allow-list and for deduplication. Delivery keeps the local
+part as written.
 
 ## Triggers
 

@@ -10,6 +10,7 @@ package notification
 import (
 	"fmt"
 	"math/rand/v2"
+	"net/mail"
 	"slices"
 	"strconv"
 	"strings"
@@ -75,7 +76,7 @@ func ConfigFromConf(c *conf.Config) (Config, error) {
 		ReviewSMOD:      strings.TrimSpace(c.Notifications.SmodEmail),
 		ReviewOperators: splitEmails(c.Notifications.EmailsOperators),
 		ReviewAdmins:    splitEmails(c.Notifications.EmailsAdmins),
-		AllowedDomains:  splitEmails(c.Notifications.AllowedDomains),
+		AllowedDomains:  splitDomains(c.Notifications.AllowedDomains),
 		ExcludedEmails:  splitEmails(c.Notifications.ExcludedEmails),
 		BaseURL:         strings.TrimRight(c.WebURL, "/"),
 	}
@@ -153,35 +154,76 @@ func withJitter(d time.Duration) time.Duration {
 	return time.Duration(float64(d) * (1 + spread))
 }
 
-// splitEmails parses a comma-separated recipient list into normalized addresses.
+// splitEmails parses a comma-separated recipient list into delivery addresses.
 func splitEmails(raw string) []string {
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
-		if e := normalizeEmail(p); e != "" {
-			out = append(out, e)
+		if address, _ := emailAddress(p); address != "" {
+			out = append(out, address)
 		}
 	}
 	return out
 }
 
-// normalizeEmail trims surrounding space and lowercases an address for dedup.
-func normalizeEmail(e string) string {
-	return strings.ToLower(strings.TrimSpace(e))
+// splitDomains parses a comma-separated domain allow-list into comparable names.
+func splitDomains(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		d := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(p)), "@")
+		if d = strings.TrimSuffix(d, "."); d != "" {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// emailAddress returns the address to deliver to and the key to compare it by.
+// Comparison ignores the display-name wrapper, case, a trailing dot on the domain and
+// a +tag in the local part; delivery keeps the local part as written, because the tag
+// usually routes the message.
+func emailAddress(raw string) (string, string) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", ""
+	}
+
+	if parsed, err := mail.ParseAddress(s); err == nil {
+		s = parsed.Address
+	}
+
+	s = strings.TrimSuffix(strings.TrimSpace(s), ".")
+
+	at := strings.LastIndex(s, "@")
+	if at <= 0 || at == len(s)-1 {
+		return "", ""
+	}
+
+	local := strings.ToLower(s[:at])
+	domain := strings.ToLower(s[at+1:])
+	address := local + "@" + domain
+
+	if tag := strings.IndexByte(local, '+'); tag > 0 {
+		return address, local[:tag] + "@" + domain
+	}
+
+	return address, address
 }
 
 // allowedDomain reports whether a user-supplied address may receive notifications.
 // An empty allow-list permits every domain. Only the creator address is subject to
 // it; the review audience comes from trusted configuration.
-func allowedDomain(allowed []string, email string) bool {
+func allowedDomain(allowed []string, raw string) bool {
 	if len(allowed) == 0 {
 		return true
 	}
 
-	at := strings.LastIndex(email, "@")
+	_, key := emailAddress(raw)
+	at := strings.LastIndex(key, "@")
 	if at < 0 {
 		return false
 	}
 
-	return slices.Contains(allowed, normalizeEmail(email[at+1:]))
+	return slices.Contains(allowed, key[at+1:])
 }

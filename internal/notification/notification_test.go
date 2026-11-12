@@ -12,6 +12,32 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/event"
 )
 
+func TestEmailAddress(t *testing.T) {
+	cases := []struct {
+		raw     string
+		address string
+		key     string
+	}{
+		{raw: "creator@com.com", address: "creator@com.com", key: "creator@com.com"},
+		{raw: "Creator <Creator@COM.com>", address: "creator@com.com", key: "creator@com.com"},
+		{raw: "creator@com.com.", address: "creator@com.com", key: "creator@com.com"},
+		{raw: "creator+alerts@com.com", address: "creator+alerts@com.com", key: "creator@com.com"},
+		{raw: "  creator+alerts@com.com  ", address: "creator+alerts@com.com", key: "creator@com.com"},
+		{raw: "creator", address: "", key: ""},
+		{raw: "", address: "", key: ""},
+	}
+
+	for _, tt := range cases {
+		address, key := emailAddress(tt.raw)
+		assert.Equal(t, tt.address, address, "address for %q", tt.raw)
+		assert.Equal(t, tt.key, key, "key for %q", tt.raw)
+	}
+}
+
+func TestSplitDomains(t *testing.T) {
+	assert.Equal(t, []string{"example.com", "partner.example"}, splitDomains(" Example.COM. , @partner.example. ,"))
+}
+
 func TestKindForStatus(t *testing.T) {
 	//nolint:exhaustive // duplicate string constants for Info/Maintenance
 	cases := map[event.Status]string{
