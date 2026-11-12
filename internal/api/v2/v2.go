@@ -1835,6 +1835,37 @@ func bindAndValidatePatchEventUpdate(c *gin.Context) (int, int, string, error) {
 	return updData.IncidentID, *updData.UpdateID, patchData.Text, nil
 }
 
+// allowEventUpdatePatch reports whether the caller may rewrite an update of the
+// stored event: its creator while the event is open, or an admin at any time.
+func allowEventUpdatePatch(
+	c *gin.Context, logger *zap.Logger, role rbac.Role, stored *db.Incident,
+) bool {
+	if role.IsAdmin() {
+		return true
+	}
+
+	userID := getUserIDFromContext(c)
+	if userID == nil || stored.CreatedBy == nil || *userID != *stored.CreatedBy {
+		logger.Debug("event update patch denied: caller is not the event creator",
+			zap.Stringp("user_id", userID),
+			zap.Stringp("created_by", stored.CreatedBy),
+		)
+		apiErrors.RaiseForbiddenErr(c, apiErrors.ErrAuthForbidden)
+		return false
+	}
+
+	if stored.EndDate != nil {
+		logger.Debug("event update patch denied: event is closed",
+			zap.Uint("event_id", stored.ID),
+			zap.Timep("end_date", stored.EndDate),
+		)
+		apiErrors.RaiseForbiddenErr(c, apiErrors.ErrAuthForbidden)
+		return false
+	}
+
+	return true
+}
+
 func PatchEventUpdateTextHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		logger.Debug(
@@ -1846,6 +1877,22 @@ func PatchEventUpdateTextHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerF
 		incID, updID, text, err := bindAndValidatePatchEventUpdate(c)
 		if err != nil {
 			apiErrors.RaiseBadRequestErr(c, err)
+			return
+		}
+
+		storedInc, ok := getEventFromContext(c)
+		if !ok {
+			logger.Error("event not found or invalid type in context")
+			apiErrors.RaiseInternalErr(c, errors.New("internal context error"))
+			return
+		}
+
+		role, ok := getRoleFromContext(c, logger)
+		if !ok {
+			return
+		}
+
+		if !allowEventUpdatePatch(c, logger, role, storedInc) {
 			return
 		}
 
