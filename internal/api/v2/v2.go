@@ -913,6 +913,10 @@ type ProcessComponentResp struct {
 }
 
 func validateEventCreation(incData IncidentData) error {
+	if err := ValidateEventComponents(incData.Components); err != nil {
+		return err
+	}
+
 	if err := validateEventDescription(incData); err != nil {
 		return err
 	}

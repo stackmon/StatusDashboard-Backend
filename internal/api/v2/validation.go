@@ -10,7 +10,30 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/event"
 )
 
-const maxComponentID = 2048
+const (
+	maxComponentID = 2048
+	// MaxEventComponents caps the number of components a single event can
+	// reference; larger lists are rejected to bound incident processing and
+	// notification fan-out.
+	MaxEventComponents = 50
+)
+
+// ValidateEventComponents validates the component list of an event payload.
+func ValidateEventComponents(components []int) error {
+	if len(components) > MaxEventComponents {
+		return apiErrors.ErrIncidentComponentsTooMany
+	}
+
+	seen := make(map[int]struct{}, len(components))
+	for _, id := range components {
+		if _, ok := seen[id]; ok {
+			return apiErrors.ErrIncidentComponentsDuplicate
+		}
+		seen[id] = struct{}{}
+	}
+
+	return nil
+}
 
 // IsValidIncidentFilterStatus checks if the status is valid for maintenance or incidents.
 func IsValidIncidentFilterStatus(status event.Status) bool {

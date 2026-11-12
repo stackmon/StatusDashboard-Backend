@@ -36,6 +36,11 @@ func ValidateComponentsMW(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 			return
 		}
 
+		if err := v2.ValidateEventComponents(components.Components); err != nil {
+			apiErrors.RaiseBadRequestErr(c, err)
+			return
+		}
+
 		// TODO: move this list to the memory cache
 		// We should check, that all components are presented in our db.
 		dbComps, err := dbInst.GetComponentsAsMap(c.Request.Context())
