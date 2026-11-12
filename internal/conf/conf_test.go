@@ -454,13 +454,15 @@ func TestMergeConfigs(t *testing.T) {
 	t.Run("merges into embedded struct (OIDC)", func(t *testing.T) {
 		c := &Config{}
 		env := map[string]string{
-			"SD_OIDC_ISSUER":    "https://zitadel.example.com",
-			"SD_OIDC_CLIENT_ID": "status-dashboard",
+			"SD_OIDC_ISSUER":     "https://zitadel.example.com",
+			"SD_OIDC_CLIENT_ID":  "status-dashboard",
+			"SD_OIDC_PROJECT_ID": "123456789012345678",
 		}
 		err := mergeConfigs(env, c, "SD")
 		require.NoError(t, err)
 		assert.Equal(t, "https://zitadel.example.com", c.OIDC.Issuer)
 		assert.Equal(t, "status-dashboard", c.OIDC.ClientID)
+		assert.Equal(t, "123456789012345678", c.OIDC.ProjectID)
 	})
 
 	t.Run("merges into embedded struct (Static)", func(t *testing.T) {

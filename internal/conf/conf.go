@@ -135,6 +135,9 @@ type OIDC struct {
 	Issuer        string `envconfig:"ISSUER"`
 	ClientID      string `envconfig:"CLIENT_ID"`
 	UsernameClaim string `envconfig:"USERNAME_CLAIM"`
+	// ProjectID scopes project role claims to this Zitadel project. Empty keeps
+	// accepting role claims from every project for backwards compatibility.
+	ProjectID string `envconfig:"PROJECT_ID"`
 }
 
 // Static configures the proxy that serves the status dashboard static site from
