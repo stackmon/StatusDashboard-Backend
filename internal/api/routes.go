@@ -127,7 +127,7 @@ func (a *API) initV2Routes() {
 			v2.RedriveNotificationsHandler(a.db, a.log, a.notifier))
 
 		// For testing purposes only.
-		v2API.GET("rss/", newRSS.HandleRSS(a.db, a.log))
+		v2API.GET("rss/", newRSS.HandleRSS(a.db, a.log, a.publicBaseURL))
 	}
 }
 
@@ -135,6 +135,6 @@ func (a *API) initV2Routes() {
 func (a *API) initRSSRoutes() {
 	rssFEED := a.r.Group("rss")
 	{
-		rssFEED.GET("/", rss.HandleRSS(a.db, a.log))
+		rssFEED.GET("/", rss.HandleRSS(a.db, a.log, a.publicBaseURL))
 	}
 }

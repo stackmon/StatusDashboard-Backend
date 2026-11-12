@@ -335,6 +335,48 @@ func TestConfig_Validate_PortValidation(t *testing.T) {
 	}
 }
 
+func TestConfig_Validate_PublicBaseURL(t *testing.T) {
+	base := Config{
+		Port: "8000",
+		OIDC: OIDC{
+			Issuer:   "https://zitadel.example.com",
+			ClientID: "status-dashboard",
+		},
+		RBAC: RBACConfig{Admins: "admins"},
+	}
+
+	tests := []struct {
+		name      string
+		baseURL   string
+		expectErr bool
+	}{
+		{name: "Empty is allowed", baseURL: ""},
+		{name: "https URL", baseURL: "https://status.example.com"},
+		{name: "http URL with a path", baseURL: "http://status.example.com/dashboard"},
+		{name: "Missing scheme", baseURL: "status.example.com", expectErr: true},
+		{name: "Unsupported scheme", baseURL: "ftp://status.example.com", expectErr: true},
+		{name: "Query string", baseURL: "https://status.example.com?x=1", expectErr: true},
+		{name: "Fragment", baseURL: "https://status.example.com#top", expectErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base
+			cfg.PublicBaseURL = tc.baseURL
+
+			err := cfg.Validate()
+			if tc.expectErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "SD_PUBLIC_BASE_URL")
+
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestFillDefaults(t *testing.T) {
 	t.Run("fills all empty fields", func(t *testing.T) {
 		c := &Config{}

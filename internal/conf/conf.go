@@ -64,6 +64,11 @@ type Config struct {
 	// Web URL for the app, used to build maintenance deep links in notifications.
 	// Example: https://web.example.com
 	WebURL string `envconfig:"WEB_URL"`
+	// PublicBaseURL is the absolute URL the API is reachable at. It is the origin
+	// of the absolute links in the RSS feeds when the request carries no forwarded
+	// scheme, i.e. behind an ingress. Empty means the request host is used.
+	// Example: https://status.example.com
+	PublicBaseURL string `envconfig:"PUBLIC_BASE_URL"`
 	// OpenAPISpecPath is the filesystem path to the OpenAPI spec served at
 	// /openapi.json. Defaults to "openapi.yaml" (resolved relative to the
 	// process working directory, matching the container's WORKDIR layout).
@@ -176,6 +181,31 @@ func (c *Config) Validate() error {
 
 	if staticErr := c.Static.Validate(); staticErr != nil {
 		return staticErr
+	}
+
+	if baseURLErr := c.validatePublicBaseURL(); baseURLErr != nil {
+		return baseURLErr
+	}
+
+	return nil
+}
+
+// validatePublicBaseURL rejects a value that cannot serve as the origin of an
+// absolute link.
+func (c *Config) validatePublicBaseURL() error {
+	if c.PublicBaseURL == "" {
+		return nil
+	}
+
+	u, err := url.Parse(c.PublicBaseURL)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Errorf(
+			"wrong SD_PUBLIC_BASE_URL %q, expected an absolute http(s) URL such as https://status.example.com",
+			c.PublicBaseURL)
+	}
+
+	if u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("wrong SD_PUBLIC_BASE_URL %q, expected a URL without query or fragment", c.PublicBaseURL)
 	}
 
 	return nil
