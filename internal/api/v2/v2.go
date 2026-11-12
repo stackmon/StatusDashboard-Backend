@@ -1844,6 +1844,12 @@ func allowEventUpdatePatch(
 		return true
 	}
 
+	if !role.CanCreate() {
+		logger.Debug("event update patch denied: insufficient role", zap.Int("role", int(role)))
+		apiErrors.RaiseForbiddenErr(c, apiErrors.ErrAuthForbidden)
+		return false
+	}
+
 	userID := getUserIDFromContext(c)
 	if userID == nil || stored.CreatedBy == nil || *userID != *stored.CreatedBy {
 		logger.Debug("event update patch denied: caller is not the event creator",
