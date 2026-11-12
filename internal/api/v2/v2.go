@@ -37,7 +37,9 @@ const (
 )
 
 type IncidentID struct {
-	ID int `json:"id" uri:"eventID" binding:"required,gte=0"`
+	// The value reaches PostgreSQL integer columns, so out-of-range IDs must be
+	// rejected before the query instead of failing inside the database.
+	ID int `json:"id" uri:"eventID" binding:"required,gte=0,lte=2147483647"`
 }
 
 type IncidentData struct {
@@ -149,11 +151,10 @@ func parsePaginationParams(c *gin.Context, params *db.IncidentsParams) error {
 		return err
 	}
 
-	page := defaultPageNumber
-	if query.Page != nil && *query.Page > 0 {
-		page = *query.Page
+	err = validateAndSetPage(query.Page, params)
+	if err != nil {
+		return err
 	}
-	params.Page = &page
 
 	limit := defaultIncidentLimit
 	if params.Limit != nil {
@@ -1447,7 +1448,7 @@ type ComponentAvailability struct {
 }
 
 type ComponentID struct {
-	ID int `json:"id" uri:"id" binding:"required,gte=0"`
+	ID int `json:"id" uri:"id" binding:"required,gte=0,lte=2147483647"`
 }
 
 // ComponentAttribute provides additional attributes for component.
