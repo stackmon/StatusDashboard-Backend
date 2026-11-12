@@ -1812,6 +1812,19 @@ type EventUpdateData struct {
 	Timestamp time.Time    `json:"timestamp"`
 }
 
+// selectEventUpdate returns the stored row addressed by its persistent ID.
+// Description rows are not part of the updates array, so they are never
+// addressable through this endpoint.
+func selectEventUpdate(updates []db.IncidentStatus, updateID int) (*db.IncidentStatus, bool) {
+	for i := range updates {
+		if int(updates[i].ID) == updateID && updates[i].Status != statusDescription {
+			return &updates[i], true
+		}
+	}
+
+	return nil, false
+}
+
 func bindAndValidatePatchEventUpdate(c *gin.Context) (int, int, string, error) {
 	type updateData struct {
 		IncidentID int  `uri:"eventID" binding:"required,gt=0"`
@@ -1856,16 +1869,16 @@ func PatchEventUpdateTextHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerF
 			return
 		}
 
-		if updID < 0 || updID >= len(updates) {
+		targetUPD, ok := selectEventUpdate(updates, updID)
+		if !ok {
 			apiErrors.RaiseStatusNotFoundErr(c, apiErrors.ErrUpdateDSNotExist)
 			return
 		}
 
-		targetUPD := updates[updID]
 		targetUPD.Text = text
 		targetUPD.ModifiedBy = getUserIDFromContext(c)
 
-		updated, err := dbInst.ModifyEventUpdate(c.Request.Context(), targetUPD)
+		updated, err := dbInst.ModifyEventUpdate(c.Request.Context(), *targetUPD)
 
 		if err != nil {
 			apiErrors.RaiseInternalErr(c, err)
@@ -1873,7 +1886,7 @@ func PatchEventUpdateTextHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerF
 		}
 
 		c.JSON(http.StatusOK, EventUpdateData{
-			ID:        updID,
+			ID:        int(updated.ID),
 			Status:    updated.Status,
 			Text:      updated.Text,
 			Timestamp: updated.Timestamp,
@@ -1893,7 +1906,6 @@ func mapEventUpdates(
 	endDate *time.Time, eventType string,
 ) ([]EventUpdateData, string) {
 	updates := make([]EventUpdateData, 0, len(statuses))
-	idx := 0
 	var latestDescription string
 	// "changed" and "impact changed" are not status changes: they collapse to the
 	// previous normalized status. Seeding that with the event status keeps a
@@ -1913,12 +1925,11 @@ func mapEventUpdates(
 		}
 		lastStatus = status
 		updates = append(updates, EventUpdateData{
-			ID:        idx,
+			ID:        int(s.ID),
 			Status:    status,
 			Text:      s.Text,
 			Timestamp: s.Timestamp,
 		})
-		idx++
 	}
 
 	return updates, latestDescription

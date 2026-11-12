@@ -333,6 +333,7 @@ paths:
             format: int64
         - name: update_id
           in: path
+          description: Persistent update identifier returned by the read endpoints.
           required: true
           schema:
             type: integer
@@ -472,6 +473,7 @@ paths:
             format: int64
         - name: update_id
           in: path
+          description: Persistent update identifier returned by the read endpoints.
           required: true
           schema:
             type: integer
@@ -861,6 +863,7 @@ components:
       properties:
         id:
           type: integer
+          description: Persistent update identifier, independent of the list order.
         status:
           type: string
         text:
