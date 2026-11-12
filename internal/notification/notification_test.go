@@ -73,7 +73,7 @@ func TestConfigFromConf_ParsesEnabled(t *testing.T) {
 		WebURL: "https://status.example.com/",
 		SMTP: conf.SMTPConfig{
 			Host: "smtp.otc", Port: "587", From: "sd@com.com",
-			User: "u", Password: "p", TLS: true, Timeout: "30s",
+			User: "u", Password: "p", TLS: "required", Timeout: "30s",
 		},
 		Notifications: conf.NotificationsConfig{
 			Enabled: true, LeaseTimeout: "60s", MaxAttempts: "5", BackoffInterval: "5m",
@@ -86,6 +86,7 @@ func TestConfigFromConf_ParsesEnabled(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, cfg.Enabled)
 	assert.Equal(t, 587, cfg.Port)
+	assert.Equal(t, TLSRequired, cfg.TLS)
 	assert.Equal(t, 30*time.Second, cfg.Timeout)
 	assert.Equal(t, 60*time.Second, cfg.LeaseTimeout)
 	assert.Equal(t, 5, cfg.MaxAttempts)
