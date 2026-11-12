@@ -153,6 +153,7 @@ func (w *Worker) Drain(ctx context.Context) error {
 // deliver sends one claimed row and records the outcome. Failures (including panics)
 // are isolated per row so one bad email cannot stop the batch.
 func (w *Worker) deliver(ctx context.Context, row db.NotificationOutbox) {
+	lease := row.Lease()
 	w.metrics.recordAttempt()
 	start := time.Now()
 	err := w.sendGuarded(ctx, row)
@@ -164,32 +165,44 @@ func (w *Worker) deliver(ctx context.Context, row db.NotificationOutbox) {
 			zap.Bool("permanent", errors.Is(err, ErrPermanentDelivery)),
 			zap.Error(err))
 		w.metrics.recordFailed(row.Kind)
-		w.markFailure(row.ID, err)
+		w.markFailure(lease, err)
 		return
 	}
 
 	w.metrics.recordSent(row.Kind)
 	updateCtx, cancel := w.updateCtx()
 	defer cancel()
-	if err = w.db.MarkSent(updateCtx, nil, row.ID); err != nil {
-		w.log.Error("mark sent", zap.Uint("outbox_id", row.ID), zap.Error(err))
+	if err = w.db.MarkSent(updateCtx, nil, lease); err != nil {
+		w.logFinalize("mark sent", lease.ID, err)
 	}
 }
 
 // markFailure records the outcome, skipping the retry schedule for rejections that
 // every further attempt would reproduce.
-func (w *Worker) markFailure(id uint, sendErr error) {
+func (w *Worker) markFailure(lease db.Lease, sendErr error) {
 	updateCtx, cancel := w.updateCtx()
 	defer cancel()
 	var err error
 	if errors.Is(sendErr, ErrPermanentDelivery) {
-		err = w.db.MarkFailedTerminal(updateCtx, nil, id, sendErr.Error())
+		err = w.db.MarkFailedTerminal(updateCtx, nil, lease, sendErr.Error())
 	} else {
-		err = w.db.MarkFailed(updateCtx, nil, id, sendErr.Error(), w.maxAttempts, w.backoff)
+		err = w.db.MarkFailed(updateCtx, nil, lease, sendErr.Error(), w.maxAttempts, w.backoff)
 	}
 	if err != nil {
-		w.log.Error("mark failed", zap.Uint("outbox_id", id), zap.Error(err))
+		w.logFinalize("mark failed", lease.ID, err)
 	}
+}
+
+// logFinalize reports an outcome that could not be recorded. A lost lease is expected
+// when the stale-recovery path already reassigned the row, so it is not an error.
+func (w *Worker) logFinalize(stage string, id uint, err error) {
+	if errors.Is(err, db.ErrNotificationLeaseLost) {
+		w.log.Warn("outbox outcome discarded: lease lost",
+			zap.String("stage", stage), zap.Uint("outbox_id", id))
+		return
+	}
+
+	w.log.Error(stage, zap.Uint("outbox_id", id), zap.Error(err))
 }
 
 // updateCtx returns a short-lived context independent of the worker's ctx so the
