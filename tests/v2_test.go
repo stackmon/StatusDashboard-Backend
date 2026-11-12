@@ -1479,6 +1479,13 @@ func TestV2GetComponentsAvailability(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, availability)
 
+	// Every component reports the full month series, including components
+	// without an incident in the window.
+	for _, compAvail := range availability.Data {
+		assert.NotEmpty(t, compAvail.Availability,
+			"component %d must report its availability months", compAvail.ID)
+	}
+
 	// Test case 2: Check if the availability data is correct
 	// All 3 target months should have exactly 50% availability
 	targetMonths := map[int]bool{

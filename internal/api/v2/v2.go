@@ -1652,22 +1652,13 @@ func GetComponentsAvailabilityHandler(dbInst *db.DB, logger *zap.Logger) gin.Han
 			return
 		}
 
-		componentsWithIncidents, err := dbInst.GetComponentIDsWithIncidents(ctx)
-		if err != nil {
-			apiErrors.RaiseInternalErr(c, err)
-			return
-		}
-
 		months := availabilityMonths(start, end)
 		downtimeByComponent := groupComponentDowntime(downtime)
 
 		availability := make([]*ComponentAvailability, len(components))
 		for index, comp := range components {
-			var monthly []MonthlyAvailability
-			if _, hasIncidents := componentsWithIncidents[comp.ID]; hasIncidents {
-				monthly = buildMonthlyAvailability(months, downtimeByComponent[comp.ID])
-				sortComponentAvailability(monthly)
-			}
+			monthly := buildMonthlyAvailability(months, downtimeByComponent[comp.ID])
+			sortComponentAvailability(monthly)
 
 			availability[index] = &ComponentAvailability{
 				ComponentID:  ComponentID{int(comp.ID)},

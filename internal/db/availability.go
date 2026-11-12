@@ -18,7 +18,7 @@ WITH months AS (
 )
 SELECT
     icr.component_id,
-    m.month_start,
+    TO_CHAR(m.month_start, 'YYYY-MM') AS month_key,
     SUM(
         EXTRACT(EPOCH FROM (
             LEAST(i.end_date, m.month_start + interval '1 month', $2::timestamp)
@@ -36,11 +36,6 @@ WHERE i.impact = 3
   AND i.end_date > m.month_start
 GROUP BY icr.component_id, m.month_start
 ORDER BY icr.component_id, m.month_start`
-
-const componentsWithIncidentsQuery = `
-SELECT DISTINCT component_id
-FROM incident_component_relation
-ORDER BY component_id`
 
 // ComponentDowntime is the outage downtime one component accumulated in a
 // calendar month of the requested availability window.
@@ -65,11 +60,15 @@ func (db *DB) GetComponentDowntime(
 	for rows.Next() {
 		var (
 			componentID int
-			month       time.Time
+			monthKey    string
 			hours       float64
 		)
-		if err = rows.Scan(&componentID, &month, &hours); err != nil {
+		if err = rows.Scan(&componentID, &monthKey, &hours); err != nil {
 			return nil, err
+		}
+		month, parseErr := time.Parse("2006-01", monthKey)
+		if parseErr != nil {
+			return nil, parseErr
 		}
 		downtime = append(downtime, ComponentDowntime{
 			ComponentID: uint(componentID),
@@ -79,25 +78,4 @@ func (db *DB) GetComponentDowntime(
 	}
 
 	return downtime, rows.Err()
-}
-
-// GetComponentIDsWithIncidents returns the components referenced by at least
-// one event, including events outside the availability window.
-func (db *DB) GetComponentIDsWithIncidents(ctx context.Context) (map[uint]struct{}, error) {
-	rows, err := db.sql.QueryContext(ctx, componentsWithIncidentsQuery)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	components := make(map[uint]struct{})
-	for rows.Next() {
-		var componentID int
-		if err = rows.Scan(&componentID); err != nil {
-			return nil, err
-		}
-		components[uint(componentID)] = struct{}{}
-	}
-
-	return components, rows.Err()
 }
