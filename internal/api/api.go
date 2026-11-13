@@ -47,6 +47,13 @@ func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
 	}
 
 	r := gin.New()
+
+	// gin trusts every peer by default, which would let any client pick the
+	// address that is logged for it through X-Forwarded-For.
+	if err = setTrustedProxies(r, cfg); err != nil {
+		return nil, err
+	}
+
 	r.Use(Logger(log), gin.Recovery())
 	r.Use(ErrorHandle())
 	r.Use(SecurityHeaders())
@@ -77,6 +84,21 @@ func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
 		return nil, fmt.Errorf("init routes: %w", err)
 	}
 	return a, nil
+}
+
+// setTrustedProxies restricts forwarded-header trust to SD_TRUSTED_PROXIES. With
+// no configured proxy no header is trusted and the client IP is the TCP peer.
+func setTrustedProxies(r *gin.Engine, cfg *conf.Config) error {
+	proxies, err := cfg.TrustedProxyList()
+	if err != nil {
+		return err
+	}
+
+	if err = r.SetTrustedProxies(proxies); err != nil {
+		return fmt.Errorf("set trusted proxies: %w", err)
+	}
+
+	return nil
 }
 
 func newAuthProvider(cfg *conf.Config, roleNames []string) (*auth.Provider, error) {

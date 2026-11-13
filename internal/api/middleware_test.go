@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,11 +19,14 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/stackmon/otc-status-dashboard/internal/api/auth"
 	"github.com/stackmon/otc-status-dashboard/internal/api/rbac"
 	v2 "github.com/stackmon/otc-status-dashboard/internal/api/v2"
+	"github.com/stackmon/otc-status-dashboard/internal/conf"
 )
 
 const (
@@ -694,4 +698,69 @@ func TestSecurityHeaders(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "DENY", w.Header().Get("X-Frame-Options"))
 	assert.Equal(t, "frame-ancestors 'none'", w.Header().Get("Content-Security-Policy"))
+}
+
+// A path is decoded before it reaches the logger, so an escape sequence in it
+// must not reach the log as a terminal control character.
+func TestLoggerSanitizesRequestData(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+
+	router := gin.New()
+	router.Use(Logger(zap.New(core)))
+	// Answering 200 keeps the entry on the normal request path.
+	router.NoRoute(func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	req := httptest.NewRequest(http.MethodGet, "/rss/%1b[2J?mt=Global", nil)
+	req.Header.Set("User-Agent", "probe\x1b[31m")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	entries := logs.All()
+	require.Len(t, entries, 1)
+
+	fields := entries[0].ContextMap()
+	assert.Equal(t, "/rss/[2J", fields["path"])
+	assert.Equal(t, "probe[31m", fields["user-agent"])
+	assert.NotContains(t, entries[0].Message, "\x1b")
+	assert.NotContains(t, fields["path"], "\x1b")
+}
+
+func TestSanitizeLogStringCapsTheLength(t *testing.T) {
+	long := strings.Repeat("a", maxLogFieldLen*2)
+
+	assert.Len(t, sanitizeLogString(long), maxLogFieldLen)
+}
+
+func TestClientIPWithoutTrustedProxies(t *testing.T) {
+	router := gin.New()
+	require.NoError(t, setTrustedProxies(router, &conf.Config{}))
+	router.GET("/", func(c *gin.Context) { c.String(http.StatusOK, c.ClientIP()) })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "192.0.2.10:1234"
+	req.Header.Set("X-Forwarded-For", "203.0.113.7")
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, "192.0.2.10", w.Body.String(), "a forwarded header must be ignored without a trusted proxy")
+}
+
+func TestClientIPFromTrustedProxy(t *testing.T) {
+	router := gin.New()
+	require.NoError(t, setTrustedProxies(router, &conf.Config{TrustedProxies: "10.0.0.0/8"}))
+	router.GET("/", func(c *gin.Context) { c.String(http.StatusOK, c.ClientIP()) })
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "10.1.2.3:1234"
+	req.Header.Set("X-Forwarded-For", "203.0.113.7")
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, "203.0.113.7", w.Body.String())
+}
+
+func TestSetTrustedProxiesRejectsAnInvalidEntry(t *testing.T) {
+	require.Error(t, setTrustedProxies(gin.New(), &conf.Config{TrustedProxies: "ingress"}))
 }

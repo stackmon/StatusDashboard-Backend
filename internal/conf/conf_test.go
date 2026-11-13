@@ -916,3 +916,52 @@ func TestConfig_Log(t *testing.T) {
 		assert.Equal(t, "67108864", fields["cache_max_bytes"])
 	})
 }
+
+func TestTrustedProxyList(t *testing.T) {
+	tests := []struct {
+		name      string
+		raw       string
+		expect    []string
+		expectErr bool
+	}{
+		{name: "Empty means no proxy", raw: ""},
+		{name: "Single CIDR", raw: "10.0.0.0/8", expect: []string{"10.0.0.0/8"}},
+		{name: "Single IP", raw: "192.168.1.5", expect: []string{"192.168.1.5"}},
+		{
+			name:   "List with spaces",
+			raw:    " 10.0.0.0/8 , 192.168.1.5 ",
+			expect: []string{"10.0.0.0/8", "192.168.1.5"},
+		},
+		{name: "Hostname is not a network", raw: "ingress", expectErr: true},
+		{name: "Invalid CIDR", raw: "10.0.0.0/33", expectErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proxies, err := (&Config{TrustedProxies: tc.raw}).TrustedProxyList()
+			if tc.expectErr {
+				require.Error(t, err)
+				assert.Nil(t, proxies)
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.expect, proxies)
+		})
+	}
+}
+
+func TestConfig_Validate_RejectsAnInvalidTrustedProxy(t *testing.T) {
+	cfg := Config{
+		Port: "8000",
+		OIDC: OIDC{
+			Issuer:   "https://zitadel.example.com",
+			ClientID: "status-dashboard",
+		},
+		RBAC:           RBACConfig{Admins: "admins"},
+		TrustedProxies: "ingress",
+	}
+
+	require.Error(t, cfg.Validate())
+}

@@ -3,6 +3,7 @@ package conf
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/mail"
 	"net/url"
 	"reflect"
@@ -61,6 +62,11 @@ type Config struct {
 	// MetricsPort serves /metrics on its own listener so the queue telemetry is not
 	// reachable from the public API port.
 	MetricsPort string `envconfig:"METRICS_PORT"`
+	// TrustedProxies lists the IPs and CIDRs whose X-Forwarded-* headers are
+	// trusted, comma-separated. Empty means no proxy is trusted: the client IP is
+	// the TCP peer and a forwarded header is ignored.
+	// Example: 10.0.0.0/8,192.168.1.5
+	TrustedProxies string `envconfig:"TRUSTED_PROXIES"`
 	// Web URL for the app, used to build maintenance deep links in notifications.
 	// Example: https://web.example.com
 	WebURL string `envconfig:"WEB_URL"`
@@ -172,6 +178,10 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if _, err = c.TrustedProxyList(); err != nil {
+		return err
+	}
+
 	if c.OIDC.Issuer == "" || c.OIDC.ClientID == "" {
 		return fmt.Errorf("SD_OIDC_ISSUER and SD_OIDC_CLIENT_ID are required")
 	}
@@ -211,6 +221,50 @@ func (c *Config) validatePublicBaseURL() error {
 
 	if u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("wrong SD_PUBLIC_BASE_URL %q, expected a URL without query or fragment", c.PublicBaseURL)
+	}
+
+	return nil
+}
+
+// TrustedProxyList parses SD_TRUSTED_PROXIES. An empty configuration yields nil,
+// which is what disables forwarded-header trust in the HTTP router.
+func (c *Config) TrustedProxyList() ([]string, error) {
+	fields := strings.Split(c.TrustedProxies, ",")
+
+	proxies := make([]string, 0, len(fields))
+
+	for _, field := range fields {
+		proxy := strings.TrimSpace(field)
+		if proxy == "" {
+			continue
+		}
+
+		if err := validateProxy(proxy); err != nil {
+			return nil, err
+		}
+
+		proxies = append(proxies, proxy)
+	}
+
+	if len(proxies) == 0 {
+		return nil, nil
+	}
+
+	return proxies, nil
+}
+
+// validateProxy rejects an entry that is not a network origin.
+func validateProxy(proxy string) error {
+	if strings.Contains(proxy, "/") {
+		if _, _, err := net.ParseCIDR(proxy); err != nil {
+			return fmt.Errorf("wrong SD_TRUSTED_PROXIES entry %q, expected an IP or CIDR", proxy)
+		}
+
+		return nil
+	}
+
+	if net.ParseIP(proxy) == nil {
+		return fmt.Errorf("wrong SD_TRUSTED_PROXIES entry %q, expected an IP or CIDR", proxy)
 	}
 
 	return nil
@@ -638,6 +692,7 @@ func (c *Config) Log(logger *zap.Logger) {
 
 	logger.Info("Endpoint configuration",
 		zap.String("port", c.Port),
+		zap.String("trusted_proxies", c.TrustedProxies),
 	)
 
 	logger.Info("Static site configuration",
