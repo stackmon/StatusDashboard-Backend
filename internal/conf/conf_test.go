@@ -373,12 +373,14 @@ func TestSanitizeDBString(t *testing.T) {
 		name   string
 		input  string
 		expect string
+		absent string
 	}{
 		{name: "Empty string", input: "", expect: ""},
 		{
 			name:   "Full connection string strips credentials",
 			input:  "postgresql://user:pass@localhost:5432/mydb",
 			expect: "postgresql://localhost:5432/mydb",
+			absent: "pass",
 		},
 		{
 			name:   "URL without credentials",
@@ -386,17 +388,53 @@ func TestSanitizeDBString(t *testing.T) {
 			expect: "postgresql://localhost:5432/mydb",
 		},
 		{
-			name:   "Invalid URL returns raw string",
+			name:   "Unparsable URL is replaced",
 			input:  "://broken",
-			expect: "://broken",
+			expect: unparsableDSN,
+		},
+		{
+			name:   "Malformed URL is replaced",
+			input:  "postgresql://localhost:5432/my%zzdb",
+			expect: unparsableDSN,
+			absent: "%zz",
+		},
+		{
+			name:   "Key/value DSN is replaced",
+			input:  "host=localhost user=mon sslmode=require dbname=mydb",
+			expect: unparsableDSN,
+			absent: "sslmode",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expect, sanitizeDBString(tc.input))
+			got := sanitizeDBString(tc.input)
+
+			assert.Equal(t, tc.expect, got)
+
+			if tc.absent != "" {
+				assert.NotContains(t, got, tc.absent)
+			}
 		})
 	}
+}
+
+// The storage line of the startup log must never carry the DSN, not even when
+// the DSN cannot be parsed.
+func TestConfig_LogHidesAnUnparsableDSN(t *testing.T) {
+	const dsn = "host=localhost user=mon sslmode=require dbname=mydb"
+
+	core, logs := observer.New(zap.InfoLevel)
+
+	c := &Config{DB: dsn}
+	c.Log(zap.New(core))
+
+	entries := logs.FilterMessage("Storage and logging configuration").All()
+	require.Len(t, entries, 1)
+
+	fields := entries[0].ContextMap()
+	assert.Equal(t, unparsableDSN, fields["db"])
+	assert.NotContains(t, fields["db"], "sslmode")
 }
 
 func TestMergeConfigs(t *testing.T) {
