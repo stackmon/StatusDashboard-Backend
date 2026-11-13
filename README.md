@@ -34,6 +34,7 @@ is missing or invalid.
 | `SD_OIDC_ISSUER` | – | **required**, must match the discovered issuer exactly |
 | `SD_OIDC_CLIENT_ID` | – | **required**, the audience accepted in `aud` |
 | `SD_OIDC_USERNAME_CLAIM` | – | display name only, never used as identity |
+| `SD_OIDC_PROJECT_ID` | – | Zitadel project ID that project scoped role claims must match; unset accepts any project |
 | `SD_RBAC_ROLES_ADMINS` | – | **required**, role name(s) mapped to `admin` |
 | `SD_RBAC_ROLES_OPERATORS` | – | role name(s) mapped to `operator` |
 | `SD_RBAC_ROLES_CREATORS` | – | role name(s) mapped to `creator` |

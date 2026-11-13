@@ -25,6 +25,8 @@ const (
 	testOrgID             = "123456789012345678"
 	testGroupsClaim       = "groups"
 	testProjectRolesClaim = "urn:zitadel:iam:org:project:" + testOrgID + ":roles"
+	testOtherProjectID    = "987654321098765432"
+	testOtherProjectClaim = "urn:zitadel:iam:org:project:" + testOtherProjectID + ":roles"
 )
 
 // testIDP is a local OpenID Connect server publishing one RSA key.
@@ -85,6 +87,7 @@ func newTestProvider(t *testing.T, idp *testIDP, roleNames ...string) *Provider 
 		ClientID:      testClientID,
 		RoleNames:     roleNames,
 		UsernameClaim: testUsernameClaim,
+		ProjectID:     testOrgID,
 	})
 	require.NoError(t, err)
 
@@ -173,6 +176,42 @@ func TestProviderVerify(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.Equal(t, []string{"sd_creators"}, claims.Roles)
+	})
+
+	t.Run("project scoped roles claim of another project", func(t *testing.T) {
+		t.Parallel()
+
+		token := idp.token(t, func(claims map[string]any) {
+			claims[testOtherProjectClaim] = map[string]any{
+				"sd_admins": map[string]any{testOrgID: "zitadel.example.com"},
+			}
+		})
+
+		claims, err := provider.Verify(context.Background(), token)
+
+		require.NoError(t, err)
+		assert.Empty(t, claims.Roles)
+	})
+
+	t.Run("unset project id keeps accepting any project scoped claim", func(t *testing.T) {
+		t.Parallel()
+
+		unscoped, err := NewProvider(context.Background(), ProviderConfig{
+			Issuer:        idp.server.URL,
+			ClientID:      testClientID,
+			RoleNames:     []string{"sd_admins"},
+			UsernameClaim: testUsernameClaim,
+		})
+		require.NoError(t, err)
+
+		token := idp.token(t, func(claims map[string]any) {
+			claims[testOtherProjectClaim] = map[string]any{"sd_admins": map[string]any{testOrgID: "zitadel.example.com"}}
+		})
+
+		claims, err := unscoped.Verify(context.Background(), token)
+
+		require.NoError(t, err)
+		assert.Equal(t, []string{"sd_admins"}, claims.Roles)
 	})
 
 	t.Run("roles of several claims are unioned", func(t *testing.T) {
@@ -341,10 +380,12 @@ func TestCheckKeySetTimesOut(t *testing.T) {
 func TestIsProjectRolesClaim(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, isProjectRolesClaim(testProjectRolesClaim))
-	assert.False(t, isProjectRolesClaim(testRolesClaim))
-	assert.False(t, isProjectRolesClaim(testGroupsClaim))
-	assert.False(t, isProjectRolesClaim("urn:zitadel:iam:org:project:"+testOrgID+":roles_extra"))
+	assert.True(t, isProjectRolesClaim(testProjectRolesClaim, testOrgID))
+	assert.True(t, isProjectRolesClaim(testProjectRolesClaim, ""))
+	assert.False(t, isProjectRolesClaim(testOtherProjectClaim, testOrgID))
+	assert.False(t, isProjectRolesClaim(testRolesClaim, testOrgID))
+	assert.False(t, isProjectRolesClaim(testGroupsClaim, testOrgID))
+	assert.False(t, isProjectRolesClaim("urn:zitadel:iam:org:project:"+testOrgID+":roles_extra", testOrgID))
 }
 
 func TestExtractRolesFromClaims(t *testing.T) {
@@ -356,8 +397,9 @@ func TestExtractRolesFromClaims(t *testing.T) {
 		testProjectRolesClaim: map[string]any{"sd_admins": map[string]any{testOrgID: "otc"}},
 	}
 
-	assert.Equal(t, []string{"sd_admins", "sd_creators"}, extractRolesFromClaims(payload, known))
-	assert.Empty(t, extractRolesFromClaims(payload, roleNameSet(nil)))
+	assert.Equal(t, []string{"sd_admins", "sd_creators"}, extractRolesFromClaims(payload, known, testOrgID))
+	assert.Empty(t, extractRolesFromClaims(payload, roleNameSet(nil), testOrgID))
+	assert.Equal(t, []string{"sd_creators"}, extractRolesFromClaims(payload, known, testOtherProjectID))
 
 	testCases := []struct {
 		name     string
@@ -419,7 +461,7 @@ func TestExtractRolesFromClaims(t *testing.T) {
 
 			claim := map[string]any{testGroupsClaim: testCase.value}
 
-			assert.Equal(t, testCase.expected, extractRolesFromClaims(claim, known))
+			assert.Equal(t, testCase.expected, extractRolesFromClaims(claim, known, testOrgID))
 		})
 	}
 }

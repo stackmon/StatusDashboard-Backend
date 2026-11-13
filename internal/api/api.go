@@ -86,6 +86,7 @@ func newAuthProvider(cfg *conf.Config, roleNames []string) (*auth.Provider, erro
 		ClientID:      cfg.OIDC.ClientID,
 		RoleNames:     roleNames,
 		UsernameClaim: cfg.OIDC.UsernameClaim,
+		ProjectID:     cfg.OIDC.ProjectID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not initialise the OIDC provider: %w", err)
