@@ -690,10 +690,7 @@ func moveComponentFromToSystemIncidents(
 				zap.Uint("componentID", comp.ID), zap.Uint("incidentID", sysInc.ID),
 			)
 
-			var closeOld bool
-			if len(sysInc.Components) == 1 {
-				closeOld = true
-			}
+			closeOld := len(oldInc.Components) == 1
 
 			inc, err := dbInst.MoveComponentFromOldToAnotherIncident(ctx, comp, oldInc, sysInc, closeOld)
 			if err != nil {

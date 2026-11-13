@@ -719,6 +719,149 @@ func TestV2SystemIncidentMixedScenarios(t *testing.T) {
 	assert.NotEmpty(t, incident.Components)
 }
 
+// TestV2SystemIncidentMergeKeepsMultiComponentSourceOpen tests that moving a component
+// out of a multi-component system incident does not close the source incident.
+func TestV2SystemIncidentMergeKeepsMultiComponentSourceOpen(t *testing.T) {
+	t.Log("Test: system incident merge keeps multi-component source incident open")
+	r := initTests(t)
+
+	cleanupOpenIncidents(t, r)
+
+	systemTrue := true
+	startDate := time.Now().UTC()
+
+	lowImpact := 1
+	lowData := v2.IncidentData{
+		Title:       "Low impact system incident",
+		Description: "Low impact system incident with 2 components",
+		Impact:      &lowImpact,
+		Components:  []int{3, 4},
+		StartDate:   startDate,
+		System:      &systemTrue,
+		Type:        event.TypeIncident,
+	}
+
+	respLow := v2CreateIncident(t, r, &lowData)
+	require.NotNil(t, respLow)
+	require.Len(t, respLow.Result, 2)
+	lowIncidentID := respLow.Result[0].IncidentID
+	require.Equal(t, lowIncidentID, respLow.Result[1].IncidentID)
+
+	highImpact := 3
+	highData := v2.IncidentData{
+		Title:       "High impact system incident",
+		Description: "High impact system incident with 1 component",
+		Impact:      &highImpact,
+		Components:  []int{5},
+		StartDate:   startDate,
+		System:      &systemTrue,
+		Type:        event.TypeIncident,
+	}
+
+	respHigh := v2CreateIncident(t, r, &highData)
+	require.NotNil(t, respHigh)
+	require.Len(t, respHigh.Result, 1)
+	highIncidentID := respHigh.Result[0].IncidentID
+
+	mergeData := v2.IncidentData{
+		Title:       "High impact system incident",
+		Description: "Move component 3 to the high impact incident",
+		Impact:      &highImpact,
+		Components:  []int{3},
+		StartDate:   startDate,
+		System:      &systemTrue,
+		Type:        event.TypeIncident,
+	}
+
+	respMerge := v2CreateIncident(t, r, &mergeData)
+	require.NotNil(t, respMerge)
+	require.Len(t, respMerge.Result, 1)
+	assert.Equal(t, 3, respMerge.Result[0].ComponentID)
+	assert.Equal(t, highIncidentID, respMerge.Result[0].IncidentID)
+	assert.Empty(t, respMerge.Result[0].Error)
+
+	lowIncident := v2GetEvent(t, r, lowIncidentID)
+	assert.Nil(t, lowIncident.EndDate)
+	assert.Equal(t, []int{4}, lowIncident.Components)
+
+	highIncident := v2GetEvent(t, r, highIncidentID)
+	assert.Nil(t, highIncident.EndDate)
+	assert.ElementsMatch(t, []int{3, 5}, highIncident.Components)
+}
+
+// TestV2SystemIncidentMergeClosesSingleComponentSource tests that moving the only
+// component out of a system incident closes the source incident.
+func TestV2SystemIncidentMergeClosesSingleComponentSource(t *testing.T) {
+	t.Log("Test: system incident merge closes single-component source incident")
+	r := initTests(t)
+
+	cleanupOpenIncidents(t, r)
+
+	systemTrue := true
+	startDate := time.Now().UTC()
+
+	lowImpact := 1
+	lowData := v2.IncidentData{
+		Title:       "Low impact system incident",
+		Description: "Low impact system incident with 1 component",
+		Impact:      &lowImpact,
+		Components:  []int{3},
+		StartDate:   startDate,
+		System:      &systemTrue,
+		Type:        event.TypeIncident,
+	}
+
+	respLow := v2CreateIncident(t, r, &lowData)
+	require.NotNil(t, respLow)
+	require.Len(t, respLow.Result, 1)
+	lowIncidentID := respLow.Result[0].IncidentID
+
+	highImpact := 3
+	highData := v2.IncidentData{
+		Title:       "High impact system incident",
+		Description: "High impact system incident with 2 components",
+		Impact:      &highImpact,
+		Components:  []int{4, 5},
+		StartDate:   startDate,
+		System:      &systemTrue,
+		Type:        event.TypeIncident,
+	}
+
+	respHigh := v2CreateIncident(t, r, &highData)
+	require.NotNil(t, respHigh)
+	require.Len(t, respHigh.Result, 2)
+	highIncidentID := respHigh.Result[0].IncidentID
+	require.Equal(t, highIncidentID, respHigh.Result[1].IncidentID)
+
+	mergeData := v2.IncidentData{
+		Title:       "High impact system incident",
+		Description: "Move component 3 to the high impact incident",
+		Impact:      &highImpact,
+		Components:  []int{3},
+		StartDate:   startDate,
+		System:      &systemTrue,
+		Type:        event.TypeIncident,
+	}
+
+	respMerge := v2CreateIncident(t, r, &mergeData)
+	require.NotNil(t, respMerge)
+	require.Len(t, respMerge.Result, 1)
+	assert.Equal(t, 3, respMerge.Result[0].ComponentID)
+	assert.Equal(t, highIncidentID, respMerge.Result[0].IncidentID)
+	assert.Empty(t, respMerge.Result[0].Error)
+
+	lowIncident := v2GetEvent(t, r, lowIncidentID)
+	require.NotNil(t, lowIncident.EndDate)
+	require.NotEmpty(t, lowIncident.Updates)
+	lastUpdate := lowIncident.Updates[len(lowIncident.Updates)-1]
+	assert.Equal(t, event.IncidentResolved, lastUpdate.Status)
+	assert.Contains(t, lastUpdate.Text, "Incident closed by system")
+
+	highIncident := v2GetEvent(t, r, highIncidentID)
+	assert.Nil(t, highIncident.EndDate)
+	assert.ElementsMatch(t, []int{3, 4, 5}, highIncident.Components)
+}
+
 // Helper function to clean up open incidents before each test.
 func cleanupOpenIncidents(t *testing.T, r *gin.Engine) {
 	t.Helper()
