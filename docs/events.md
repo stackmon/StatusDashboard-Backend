@@ -118,6 +118,9 @@ A background checker runs every two minutes and advances stored events:
   `start_date`, `in_progress` between `start_date` and `end_date`, `completed` after `end_date`.
 * `info` — a `cancelled` status short-circuits, then `planned` / `active` / `completed` follow the
   clock as above.
+* An explicit `completed` status outranks the clock for both types: an event finished before its
+  planned `end_date`, or an `info` event completed without one, stays `completed`. A status recorded
+  after the completion reopens the event.
 * Missed transitions are backfilled: `planned` at `start_date`, `in_progress`/`active` at
   `start_date`, `completed` at `end_date`. A cancelled maintenance only receives the backfilled
   `planned` status if it was `reviewed` or already had `planned`.
@@ -151,7 +154,8 @@ see [auth.md](auth.md).
 
 ### Info
 
-Info events change status without additional restrictions.
+Info events change status without additional restrictions. Completing one that has no `end_date`
+stamps it with `update_date`, mirroring `resolved` for incidents.
 
 ### Update text — `PATCH /v2/events/:eventID/updates/:updateID`
 

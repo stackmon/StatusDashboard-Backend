@@ -1338,6 +1338,12 @@ func updateFields(income *PatchIncidentData, stored *db.Incident) {
 	if income.Status == event.IncidentResolved {
 		stored.EndDate = &income.UpdateDate
 	}
+
+	// An info event closed without any end date gets the completion as its end. A
+	// stored end date is kept: omitting the field means "unchanged".
+	if income.Status == event.InfoCompleted && income.EndDate == nil && stored.EndDate == nil {
+		stored.EndDate = &income.UpdateDate
+	}
 }
 
 type PostIncidentExtractData struct {

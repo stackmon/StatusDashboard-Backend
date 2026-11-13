@@ -18,6 +18,9 @@ type MntStatusHistory struct {
 	hasInProgress bool
 	hasCompleted  bool
 	hasCancelled  bool
+	// latest is the status of the last row. Rows are append-only, so it is the
+	// status the event was moved to last.
+	latest event.Status
 }
 
 func (st *MntStatusHistory) hasStatus(status event.Status) bool {
@@ -50,7 +53,10 @@ func (st *MntStatusHistory) setStatus(status event.Status) {
 	case event.MaintenanceCancelled:
 		st.hasCancelled = true
 	default:
+		return
 	}
+
+	st.latest = status
 }
 
 func (ch *Checker) CheckMaintenance(ctx context.Context) error {
@@ -151,21 +157,7 @@ func (ch *Checker) evaluateAndFixMntStatus(mn *db.Incident) event.Status {
 func calculateMntStatusHistory(mn *db.Incident) *MntStatusHistory {
 	sHistory := &MntStatusHistory{}
 	for _, st := range mn.Statuses {
-		if st.Status == event.MaintenanceReviewed {
-			sHistory.hasReviewed = true
-		}
-		if st.Status == event.MaintenancePlanned {
-			sHistory.hasPlanned = true
-		}
-		if st.Status == event.MaintenanceInProgress {
-			sHistory.hasInProgress = true
-		}
-		if st.Status == event.MaintenanceCompleted {
-			sHistory.hasCompleted = true
-		}
-		if st.Status == event.MaintenanceCancelled {
-			sHistory.hasCancelled = true
-		}
+		sHistory.setStatus(st.Status)
 	}
 
 	return sHistory
@@ -174,6 +166,19 @@ func calculateMntStatusHistory(mn *db.Incident) *MntStatusHistory {
 func calculateCurrentMntStatus(sHistory *MntStatusHistory, mn *db.Incident) event.Status {
 	if sHistory.hasCancelled {
 		return event.MaintenanceCancelled
+	}
+
+	// An explicit completion outranks the clock: a maintenance may finish before
+	// its planned end_date, which the clock below would read as still running.
+	if sHistory.latest == event.MaintenanceCompleted {
+		return event.MaintenanceCompleted
+	}
+
+	// A status recorded after the completion reopens the event, so the planned end
+	// date that already passed must not close it again.
+	if sHistory.hasCompleted && (sHistory.latest == event.MaintenancePlanned ||
+		sHistory.latest == event.MaintenanceInProgress || sHistory.latest == event.MaintenanceModified) {
+		return sHistory.latest
 	}
 
 	// If current status is "reviewed", transition to "planned" (checker auto-approval)
@@ -234,7 +239,11 @@ func (ch *Checker) fixMntMissedStatuses(status event.Status, sHistory *MntStatus
 			return
 		}
 		statusText = event.MaintenanceCompletedStatusText()
-		statusTimestamp = *mnt.EndDate
+		// Completion backfilled without an end date is stamped when it is recorded.
+		statusTimestamp = time.Now().UTC()
+		if mnt.EndDate != nil {
+			statusTimestamp = *mnt.EndDate
+		}
 	case event.MaintenanceCancelled:
 		ch.log.Info("fixing the cancelled status for the maintenance", zap.Uint("mntID", mnt.ID))
 		// Only backfill planned if the event progressed past pending_review.
