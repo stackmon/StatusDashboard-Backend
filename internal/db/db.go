@@ -737,32 +737,15 @@ func (db *DB) GetComponentFromNameAttrs(ctx context.Context, name string, attr *
 }
 
 func (db *DB) SaveComponent(ctx context.Context, comp *Component) (uint, error) {
-	// Validate required region attribute
 	hasRegion := false
-	for _, attr := range comp.Attrs {
-		if attr.Name == regionAttrName {
+	region := ""
+	for i := range comp.Attrs {
+		if comp.Attrs[i].Name == regionAttrName {
 			hasRegion = true
-
-			// Check if component with same name and region exists
-			exists, err := db.e.Component.Query().
-				Where(
-					component.NameEQ(comp.Name),
-					component.HasAttributesWith(
-						componentattr.NameEQ(regionAttrName),
-						componentattr.ValueEQ(attr.Value),
-					),
-				).
-				Exist(ctx)
-			if err != nil {
-				return 0, err
-			}
-			if exists {
-				return 0, ErrDBComponentExists
-			}
+			region = comp.Attrs[i].Value
 			break
 		}
 	}
-
 	if !hasRegion {
 		return 0, fmt.Errorf("missing required region attribute")
 	}
@@ -775,41 +758,61 @@ func (db *DB) SaveComponent(ctx context.Context, comp *Component) (uint, error) 
 		comp.ModifiedAt = &now
 	}
 
-	tx, err := db.e.Tx(ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	created, err := tx.Component.Create().
-		SetName(comp.Name).
-		SetCreatedAt(*comp.CreatedAt).
-		SetModifiedAt(*comp.ModifiedAt).
-		Save(ctx)
-	if err != nil {
-		_ = tx.Rollback()
-		return 0, err
-	}
-
-	for i := range comp.Attrs {
-		attr, attrErr := tx.ComponentAttr.Create().
-			SetName(comp.Attrs[i].Name).
-			SetValue(comp.Attrs[i].Value).
-			SetComponentID(created.ID).
-			Save(ctx)
-		if attrErr != nil {
-			_ = tx.Rollback()
-			return 0, attrErr
+	var id uint
+	err := db.execWithTx(ctx, nil, func(client *ent.Client, raw entsql.ExecQuerier) error {
+		// The existence check and the insert must hold the same key, otherwise
+		// concurrent callers can both pass the check and create a duplicate.
+		if lockErr := lockComponentName(ctx, raw, comp.Name, region); lockErr != nil {
+			return lockErr
 		}
-		comp.Attrs[i].ID = uint(attr.ID)
-		comp.Attrs[i].ComponentID = uint(created.ID)
-	}
 
-	if err = tx.Commit(); err != nil {
+		exists, err := client.Component.Query().
+			Where(
+				component.NameEQ(comp.Name),
+				component.HasAttributesWith(
+					componentattr.NameEQ(regionAttrName),
+					componentattr.ValueEQ(region),
+				),
+			).
+			Exist(ctx)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return ErrDBComponentExists
+		}
+
+		created, err := client.Component.Create().
+			SetName(comp.Name).
+			SetCreatedAt(*comp.CreatedAt).
+			SetModifiedAt(*comp.ModifiedAt).
+			Save(ctx)
+		if err != nil {
+			return err
+		}
+
+		for i := range comp.Attrs {
+			attr, attrErr := client.ComponentAttr.Create().
+				SetName(comp.Attrs[i].Name).
+				SetValue(comp.Attrs[i].Value).
+				SetComponentID(created.ID).
+				Save(ctx)
+			if attrErr != nil {
+				return attrErr
+			}
+			comp.Attrs[i].ID = uint(attr.ID)
+			comp.Attrs[i].ComponentID = uint(created.ID)
+		}
+
+		id = uint(created.ID)
+		return nil
+	})
+	if err != nil {
 		return 0, err
 	}
 
-	comp.ID = uint(created.ID)
-	return comp.ID, nil
+	comp.ID = id
+	return id, nil
 }
 
 func (db *DB) MoveComponentFromOldToAnotherIncident(
