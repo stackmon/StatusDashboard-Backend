@@ -2,6 +2,8 @@ package static
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,18 +21,18 @@ func entryWith(body string) *entry {
 }
 
 func TestCacheEvictsLeastRecentlyUsedEntry(t *testing.T) {
-	cache := newCache(10)
+	cache := newCache(12)
 
 	cache.put("a", entryWith("aaaaa"))
 	cache.put("b", entryWith("bbbbb"))
 
 	assert.Equal(t, 2, cache.Len())
-	assert.Equal(t, int64(10), cache.Bytes())
+	assert.Equal(t, int64(12), cache.Bytes())
 
 	cache.put("c", entryWith("ccccc"))
 
 	assert.Equal(t, 2, cache.Len())
-	assert.Equal(t, int64(10), cache.Bytes())
+	assert.Equal(t, int64(12), cache.Bytes())
 
 	_, ok := cache.get("a")
 	assert.False(t, ok, "the least recently used entry is evicted")
@@ -42,7 +44,7 @@ func TestCacheEvictsLeastRecentlyUsedEntry(t *testing.T) {
 }
 
 func TestCacheKeepsRecentlyUsedEntry(t *testing.T) {
-	cache := newCache(10)
+	cache := newCache(12)
 
 	cache.put("a", entryWith("aaaaa"))
 	cache.put("b", entryWith("bbbbb"))
@@ -79,7 +81,27 @@ func TestCacheCountsHeadersAgainstTheBudget(t *testing.T) {
 
 	cache.put("a", entryWith("aaaa"))
 	assert.Equal(t, 1, cache.Len())
-	assert.Equal(t, int64(4), cache.Bytes())
+	assert.Equal(t, int64(5), cache.Bytes(), "four body bytes plus the key")
+}
+
+// The key is held in the index next to the response, so it is part of the budget
+// too: with short bodies and long keys the cache would otherwise hold far more
+// memory than configured.
+func TestCacheCountsKeysAgainstTheBudget(t *testing.T) {
+	const budget = 64
+
+	cache := newCache(budget)
+
+	key := strings.Repeat("k", 40)
+	for i := range 10 {
+		cache.put(key+strconv.Itoa(i), entryWith("x"))
+	}
+
+	assert.LessOrEqual(t, cache.Bytes(), int64(budget))
+	assert.Equal(t, 1, cache.Len())
+
+	_, ok := cache.get(key + "9")
+	assert.True(t, ok, "the newest entry survives the eviction")
 }
 
 func TestCacheGetRespectsExpiry(t *testing.T) {

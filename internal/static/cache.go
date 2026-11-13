@@ -41,8 +41,14 @@ type cacheItem struct {
 	entry *entry
 }
 
+// size is the number of bytes the item occupies. The key is held in the index
+// next to the response, so it counts against the same budget.
+func (i *cacheItem) size() int64 {
+	return i.entry.size() + int64(len(i.key))
+}
+
 // Cache is a concurrency-safe LRU cache of origin responses, bounded by the
-// total size of the bodies and headers it holds.
+// total size of the bodies, headers and keys it holds.
 type Cache struct {
 	mu       sync.Mutex
 	maxBytes int64
@@ -119,7 +125,9 @@ func (c *Cache) touch(key string) (*cacheItem, bool) {
 // put stores a response and evicts the least recently used ones until the cache
 // fits its budget again. A response larger than the whole budget is not stored.
 func (c *Cache) put(key string, e *entry) {
-	size := e.size()
+	item := &cacheItem{key: key, entry: e}
+
+	size := item.size()
 	if size > c.maxBytes {
 		return
 	}
@@ -131,7 +139,7 @@ func (c *Cache) put(key string, e *entry) {
 		c.drop(element)
 	}
 
-	c.items[key] = c.order.PushFront(&cacheItem{key: key, entry: e})
+	c.items[key] = c.order.PushFront(item)
 	c.bytes += size
 
 	for c.bytes > c.maxBytes {
@@ -154,7 +162,7 @@ func (c *Cache) drop(element *list.Element) {
 		return
 	}
 
-	c.bytes -= item.entry.size()
+	c.bytes -= item.size()
 	delete(c.items, item.key)
 	c.order.Remove(element)
 }

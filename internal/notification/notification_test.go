@@ -12,6 +12,32 @@ import (
 	"github.com/stackmon/otc-status-dashboard/internal/event"
 )
 
+func TestEmailAddress(t *testing.T) {
+	cases := []struct {
+		raw     string
+		address string
+		key     string
+	}{
+		{raw: "creator@com.com", address: "creator@com.com", key: "creator@com.com"},
+		{raw: "Creator <Creator@COM.com>", address: "creator@com.com", key: "creator@com.com"},
+		{raw: "creator@com.com.", address: "creator@com.com", key: "creator@com.com"},
+		{raw: "creator+alerts@com.com", address: "creator+alerts@com.com", key: "creator@com.com"},
+		{raw: "  creator+alerts@com.com  ", address: "creator+alerts@com.com", key: "creator@com.com"},
+		{raw: "creator", address: "", key: ""},
+		{raw: "", address: "", key: ""},
+	}
+
+	for _, tt := range cases {
+		address, key := emailAddress(tt.raw)
+		assert.Equal(t, tt.address, address, "address for %q", tt.raw)
+		assert.Equal(t, tt.key, key, "key for %q", tt.raw)
+	}
+}
+
+func TestSplitDomains(t *testing.T) {
+	assert.Equal(t, []string{"example.com", "partner.example"}, splitDomains(" Example.COM. , @partner.example. ,"))
+}
+
 func TestKindForStatus(t *testing.T) {
 	//nolint:exhaustive // duplicate string constants for Info/Maintenance
 	cases := map[event.Status]string{
@@ -73,7 +99,7 @@ func TestConfigFromConf_ParsesEnabled(t *testing.T) {
 		WebURL: "https://status.example.com/",
 		SMTP: conf.SMTPConfig{
 			Host: "smtp.otc", Port: "587", From: "sd@com.com",
-			User: "u", Password: "p", TLS: true, Timeout: "30s",
+			User: "u", Password: "p", TLS: "required", Timeout: "30s",
 		},
 		Notifications: conf.NotificationsConfig{
 			Enabled: true, LeaseTimeout: "60s", MaxAttempts: "5", BackoffInterval: "5m",
@@ -86,6 +112,7 @@ func TestConfigFromConf_ParsesEnabled(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, cfg.Enabled)
 	assert.Equal(t, 587, cfg.Port)
+	assert.Equal(t, TLSRequired, cfg.TLS)
 	assert.Equal(t, 30*time.Second, cfg.Timeout)
 	assert.Equal(t, 60*time.Second, cfg.LeaseTimeout)
 	assert.Equal(t, 5, cfg.MaxAttempts)
