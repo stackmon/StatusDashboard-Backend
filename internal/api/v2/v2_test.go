@@ -30,98 +30,142 @@ func TestReturn404Handler(t *testing.T) {
 	assert.JSONEq(t, `{"errMsg":"page not found"}`, w.Body.String())
 }
 
-func TestCalculateAvailability(t *testing.T) {
-	type testCase struct {
-		testDescription string
-		Component       *db.Component
-		Result          []*MonthlyAvailability
+func TestAvailabilityWindow(t *testing.T) {
+	now := time.Date(2026, time.November, 12, 15, 30, 0, 0, time.UTC)
+	defaultStart := time.Date(2025, time.December, 1, 0, 0, 0, 0, time.UTC)
+	withinWindow := now.AddDate(0, -3, 0)
+	tooEarly := now.AddDate(0, -13, 0)
+
+	tests := []struct {
+		name      string
+		start     *time.Time
+		end       *time.Time
+		wantStart time.Time
+		wantEnd   time.Time
+		wantErr   error
+	}{
+		{
+			name:      "default window",
+			wantStart: defaultStart,
+			wantEnd:   now,
+		},
+		{
+			name:      "custom window inside the default range",
+			start:     &withinWindow,
+			end:       &now,
+			wantStart: withinWindow,
+			wantEnd:   now,
+		},
+		{
+			name:    "start after end",
+			start:   &now,
+			end:     &withinWindow,
+			wantErr: errors.ErrAvailabilityQueryInvalidFormat,
+		},
+		{
+			name:    "window longer than a year",
+			start:   &tooEarly,
+			wantErr: errors.ErrAvailabilityQueryInvalidFormat,
+		},
 	}
 
-	impact := 3
-	now := time.Now().UTC()
-	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, -11, 0)
-
-	comp := db.Component{
-		ID:        150,
-		Name:      "DataArts",
-		Incidents: []*db.Incident{},
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			start, end, err := availabilityWindow(tc.start, tc.end, now)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.True(t, tc.wantStart.Equal(start), "unexpected window start: %v", start)
+			assert.True(t, tc.wantEnd.Equal(end), "unexpected window end: %v", end)
+		})
 	}
+}
 
-	compForPeriod := comp
-	stDate := time.Date(periodStart.Year(), periodStart.Month(), 21, 0, 0, 0, 0, time.UTC)
-	endDate := time.Date(periodStart.Year(), periodStart.Month()+1, 2, 20, 0, 0, 0, time.UTC)
-	compForPeriod.Incidents = append(compForPeriod.Incidents, &db.Incident{
-		ID:        1,
-		StartDate: &stDate,
-		EndDate:   &endDate,
-		Impact:    &impact,
-	})
+func TestAvailabilityMonths(t *testing.T) {
+	start := time.Date(2026, time.March, 15, 10, 0, 0, 0, time.UTC)
+	end := time.Date(2026, time.May, 2, 0, 0, 0, 0, time.UTC)
 
+	months := availabilityMonths(start, end)
+
+	require.Len(t, months, 3)
+	assert.Equal(t, time.Date(2026, time.March, 1, 0, 0, 0, 0, time.UTC), months[0])
+	assert.Equal(t, time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC), months[1])
+	assert.Equal(t, time.Date(2026, time.May, 1, 0, 0, 0, 0, time.UTC), months[2])
+}
+
+func TestBuildMonthlyAvailability(t *testing.T) {
 	const (
 		precisionFactor = 100000.0
 		fullPercentage  = 100.0
 		roundFactor     = 0.5
 	)
 
+	now := time.Date(2026, time.November, 12, 15, 30, 0, 0, time.UTC)
+	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, -11, 0)
+	months := availabilityMonths(start, now)
+	require.Len(t, months, 12)
+
+	stDate := time.Date(start.Year(), start.Month(), 21, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(start.Year(), start.Month()+1, 2, 20, 0, 0, 0, time.UTC)
+	firstMonthDowntime := time.Date(stDate.Year(), stDate.Month()+1, 1, 0, 0, 0, 0, time.UTC).Sub(stDate).Hours()
+	secondMonthDowntime := endDate.Sub(time.Date(endDate.Year(), endDate.Month(), 1, 0, 0, 0, 0, time.UTC)).Hours()
+	downtime := map[availabilityMonth]float64{
+		monthKey(stDate):  firstMonthDowntime,
+		monthKey(endDate): secondMonthDowntime,
+	}
+
 	calculateExpectedAvailability := func(downtimeHours, totalHours float64) float64 {
 		availability := fullPercentage - (downtimeHours / totalHours * fullPercentage)
 		return float64(int(availability*precisionFactor+roundFactor)) / precisionFactor
 	}
-
-	firstMonthHours := hoursInMonth(stDate.Year(), int(stDate.Month()))
-	secondMonthHours := hoursInMonth(endDate.Year(), int(endDate.Month()))
 	firstMonthAvailability := calculateExpectedAvailability(
-		time.Date(stDate.Year(), stDate.Month()+1, 1, 0, 0, 0, 0, time.UTC).Sub(stDate).Hours(),
-		firstMonthHours,
+		firstMonthDowntime,
+		hoursInMonth(stDate.Year(), int(stDate.Month())),
 	)
 	secondMonthAvailability := calculateExpectedAvailability(
-		endDate.Sub(time.Date(endDate.Year(), endDate.Month(), 1, 0, 0, 0, 0, time.UTC)).Hours(),
-		secondMonthHours,
+		secondMonthDowntime,
+		hoursInMonth(endDate.Year(), int(endDate.Month())),
 	)
 
-	testCases := []testCase{
-		{
-			testDescription: "Test case: first month (availability drop) and next month (availability drop)",
-			Component:       &compForPeriod,
-			Result: func() []*MonthlyAvailability {
-				results := make([]*MonthlyAvailability, 12)
+	result := buildMonthlyAvailability(months, downtime)
+	require.Len(t, result, 12)
 
-				for i := range [12]int{} {
-					year, month := getYearAndMonth(now.Year(), int(now.Month()), 11-i)
-					results[i] = &MonthlyAvailability{
-						Year:       year,
-						Month:      month,
-						Percentage: 100,
-					}
-					if year == stDate.Year() && month == int(stDate.Month()) {
-						results[i] = &MonthlyAvailability{
-							Month:      month,
-							Percentage: firstMonthAvailability,
-						}
-					}
-					if year == endDate.Year() && month == int(endDate.Month()) {
-						results[i] = &MonthlyAvailability{
-							Month:      month,
-							Percentage: secondMonthAvailability,
-						}
-					}
-				}
-				return results
-			}(),
-		},
-	}
-
-	for _, tc := range testCases {
-		result, err := calculateAvailability(tc.Component)
-		require.NoError(t, err)
-
-		t.Logf("Test '%s': Calculated availability: %+v", tc.testDescription, result)
-
-		assert.Len(t, result, 12)
-		for i, r := range result {
-			assert.InEpsilon(t, tc.Result[i].Percentage, r.Percentage, 0.0001)
+	for _, item := range result {
+		want := fullPercentage
+		switch {
+		case item.Year == stDate.Year() && item.Month == int(stDate.Month()):
+			want = firstMonthAvailability
+		case item.Year == endDate.Year() && item.Month == int(endDate.Month()):
+			want = secondMonthAvailability
 		}
+		assert.InEpsilon(t, want, item.Percentage, 0.0001)
 	}
+
+	t.Run("ignores downtime outside the window", func(t *testing.T) {
+		outside := map[availabilityMonth]float64{monthKey(start.AddDate(0, -1, 0)): 1000}
+
+		for _, item := range buildMonthlyAvailability(months, outside) {
+			assert.InEpsilon(t, fullPercentage, item.Percentage, 0.0001)
+		}
+	})
+}
+
+func TestSortComponentAvailability(t *testing.T) {
+	availability := []MonthlyAvailability{
+		{Year: 2025, Month: 12},
+		{Year: 2026, Month: 1},
+		{Year: 2025, Month: 11},
+	}
+
+	sortComponentAvailability(availability)
+
+	assert.Equal(t, []MonthlyAvailability{
+		{Year: 2026, Month: 1},
+		{Year: 2025, Month: 12},
+		{Year: 2025, Month: 11},
+	}, availability)
 }
 
 func TestValidateEventCreationDescriptionLength(t *testing.T) {

@@ -1619,67 +1619,149 @@ func checkComponentAttrs(attrs []ComponentAttribute) error {
 	return nil
 }
 
+type APIGetAvailabilityQuery struct {
+	StartDate *time.Time `form:"start_date" binding:"omitempty"`
+	EndDate   *time.Time `form:"end_date" binding:"omitempty"`
+}
+
 func GetComponentsAvailabilityHandler(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		logger.Debug("retrieve availability of components")
 
-		components, err := dbInst.GetComponentsWithIncidents(c.Request.Context())
+		var query APIGetAvailabilityQuery
+		if err := c.ShouldBindQuery(&query); err != nil {
+			apiErrors.RaiseBadRequestErr(c, apiErrors.ErrAvailabilityQueryInvalidFormat)
+			return
+		}
+
+		start, end, err := availabilityWindow(query.StartDate, query.EndDate, time.Now().UTC())
+		if err != nil {
+			apiErrors.RaiseBadRequestErr(c, err)
+			return
+		}
+
+		ctx := c.Request.Context()
+
+		components, err := dbInst.GetComponentsWithValues(ctx)
 		if err != nil {
 			apiErrors.RaiseInternalErr(c, err)
 			return
 		}
 
+		downtime, err := dbInst.GetComponentDowntime(ctx, start, end)
+		if err != nil {
+			apiErrors.RaiseInternalErr(c, err)
+			return
+		}
+
+		months := availabilityMonths(start, end)
+		downtimeByComponent := groupComponentDowntime(downtime)
+
 		availability := make([]*ComponentAvailability, len(components))
 		for index, comp := range components {
-			attrs := make([]ComponentAttribute, len(comp.Attrs))
-			for i, attr := range comp.Attrs {
-				attrs[i] = ComponentAttribute{
-					Name:  attr.Name,
-					Value: attr.Value,
-				}
-			}
-			regionValue := ""
-			for _, attr := range attrs {
-				if attr.Name == "region" {
-					regionValue = attr.Value
-					break
-				}
-			}
-
-			incidents := make([]*Incident, len(comp.Incidents))
-			for i, inc := range comp.Incidents {
-				newInc := &Incident{
-					IncidentID: IncidentID{int(inc.ID)},
-					IncidentData: IncidentData{
-						Title:     *inc.Text,
-						Impact:    inc.Impact,
-						StartDate: *inc.StartDate,
-						EndDate:   inc.EndDate,
-						Updates:   nil,
-						Type:      inc.Type,
-					},
-				}
-				incidents[i] = newInc
-			}
-
-			compAvailability, calcErr := calculateAvailability(&comp)
-			if calcErr != nil {
-				apiErrors.RaiseInternalErr(c, calcErr)
-				return
-			}
-
-			sortComponentAvailability(compAvailability)
+			monthly := buildMonthlyAvailability(months, downtimeByComponent[comp.ID])
+			sortComponentAvailability(monthly)
 
 			availability[index] = &ComponentAvailability{
 				ComponentID:  ComponentID{int(comp.ID)},
-				Region:       regionValue,
+				Region:       componentRegion(comp),
 				Name:         comp.Name,
-				Availability: compAvailability,
+				Availability: monthly,
 			}
 		}
 
 		c.JSON(http.StatusOK, gin.H{"data": availability})
 	}
+}
+
+func componentRegion(comp db.Component) string {
+	for _, attr := range comp.Attrs {
+		if attr.Name == "region" {
+			return attr.Value
+		}
+	}
+	return ""
+}
+
+type availabilityMonth int
+
+func monthKey(month time.Time) availabilityMonth {
+	return availabilityMonth(month.Year()*12 + int(month.Month()) - 1)
+}
+
+func groupComponentDowntime(rows []db.ComponentDowntime) map[uint]map[availabilityMonth]float64 {
+	grouped := make(map[uint]map[availabilityMonth]float64, len(rows))
+	for _, row := range rows {
+		if grouped[row.ComponentID] == nil {
+			grouped[row.ComponentID] = make(map[availabilityMonth]float64)
+		}
+		grouped[row.ComponentID][monthKey(row.Month)] += row.Hours
+	}
+	return grouped
+}
+
+// availabilityWindowMonths is the default and maximum reporting window: the
+// monthly report contract is the trailing 12 months.
+const availabilityWindowMonths = 12
+
+// availabilityWindow resolves the reporting window. Without parameters it is
+// the trailing 12 months ending with the current month.
+func availabilityWindow(queryStart, queryEnd *time.Time, now time.Time) (time.Time, time.Time, error) {
+	end := now
+	if queryEnd != nil {
+		end = queryEnd.UTC()
+	}
+
+	start := time.Date(end.Year(), end.Month(), 1, 0, 0, 0, 0, time.UTC).
+		AddDate(0, -(availabilityWindowMonths - 1), 0)
+	if queryStart != nil {
+		start = queryStart.UTC()
+	}
+
+	if !start.Before(end) || availabilityMonthCount(start, end) > availabilityWindowMonths {
+		return time.Time{}, time.Time{}, apiErrors.ErrAvailabilityQueryInvalidFormat
+	}
+
+	return start, end, nil
+}
+
+func availabilityMonthCount(start, end time.Time) int {
+	return (end.Year()-start.Year())*12 + int(end.Month()-start.Month()) + 1
+}
+
+func availabilityMonths(start, end time.Time) []time.Time {
+	first := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC)
+	last := time.Date(end.Year(), end.Month(), 1, 0, 0, 0, 0, time.UTC)
+
+	months := make([]time.Time, 0, availabilityMonthCount(start, end))
+	for month := first; !month.After(last); month = month.AddDate(0, 1, 0) {
+		months = append(months, month)
+	}
+
+	return months
+}
+
+func buildMonthlyAvailability(months []time.Time, downtime map[availabilityMonth]float64) []MonthlyAvailability {
+	const (
+		precisionFactor = 100000
+		fullPercentage  = 100
+		roundFactor     = 0.5
+	)
+
+	monthlyAvailability := make([]MonthlyAvailability, 0, len(months))
+	for _, month := range months {
+		totalHours := hoursInMonth(month.Year(), int(month.Month()))
+		percentage := fullPercentage - (downtime[monthKey(month)] / totalHours * fullPercentage)
+		percentage = float64(int(percentage*precisionFactor+roundFactor)) / precisionFactor
+
+		monthlyAvailability = append(monthlyAvailability, MonthlyAvailability{
+			Year:       month.Year(),
+			Month:      int(month.Month()),
+			Percentage: percentage,
+		})
+	}
+
+	return monthlyAvailability
 }
 
 func sortComponentAvailability(availabilities []MonthlyAvailability) {
@@ -1689,115 +1771,6 @@ func sortComponentAvailability(availabilities []MonthlyAvailability) {
 		}
 		return availabilities[i].Year > availabilities[j].Year
 	})
-}
-
-// TODO: add filters for GET request
-func calculateAvailability(component *db.Component) ([]MonthlyAvailability, error) {
-	const (
-		monthsInYear       = 12
-		precisionFactor    = 100000
-		fullPercentage     = 100
-		availabilityMonths = 11
-		roundFactor        = 0.5
-	)
-
-	if component == nil {
-		return nil, fmt.Errorf("component is nil")
-	}
-
-	if len(component.Incidents) == 0 {
-		return nil, nil
-	}
-
-	periodEndDate := time.Now().UTC()
-	// Get the current date and starting point (12 months ago)
-	// a year ago, including current the month
-	periodStartDate := time.Date(periodEndDate.Year(), periodEndDate.Month(),
-		1, 0, 0, 0, 0, time.UTC).AddDate(0, -availabilityMonths, 0)
-	monthlyDowntime := make([]float64, monthsInYear) // 12 months
-
-	for _, inc := range component.Incidents {
-		if inc.EndDate == nil || *inc.Impact != 3 {
-			continue
-		}
-
-		// here we skip all incidents that are not correspond to our period
-		// if the incident started before availability period
-		// (as example the incident was started at 01:00 31/12 and finished at 02:00 01/01),
-		// we cut the beginning to the period start date, and do the same for the period ending
-
-		incidentStart, incidentEnd, valid := adjustIncidentPeriod(
-			*inc.StartDate,
-			*inc.EndDate,
-			periodStartDate,
-			periodEndDate,
-		)
-		if !valid {
-			continue
-		}
-
-		current := incidentStart
-		for current.Before(incidentEnd) {
-			monthStart := time.Date(current.Year(), current.Month(), 1, 0, 0, 0, 0, time.UTC)
-			monthEnd := monthStart.AddDate(0, 1, 0)
-
-			downtimeStart := maxTime(incidentStart, monthStart)
-			downtimeEnd := minTime(incidentEnd, monthEnd)
-			downtime := downtimeEnd.Sub(downtimeStart).Hours()
-
-			monthIndex := (downtimeStart.Year()-periodStartDate.Year())*monthsInYear +
-				int(downtimeStart.Month()-periodStartDate.Month())
-			if monthIndex >= 0 && monthIndex < len(monthlyDowntime) {
-				monthlyDowntime[monthIndex] += downtime
-			}
-
-			current = monthEnd
-		}
-	}
-
-	monthlyAvailability := make([]MonthlyAvailability, 0, monthsInYear)
-	for i := range [monthsInYear]int{} {
-		monthDate := periodStartDate.AddDate(0, i, 0)
-		totalHours := hoursInMonth(monthDate.Year(), int(monthDate.Month()))
-		availability := fullPercentage - (monthlyDowntime[i] / totalHours * fullPercentage)
-		availability = float64(int(availability*precisionFactor+roundFactor)) / precisionFactor
-
-		monthlyAvailability = append(monthlyAvailability, MonthlyAvailability{
-			Year:       monthDate.Year(),
-			Month:      int(monthDate.Month()),
-			Percentage: availability,
-		})
-	}
-
-	return monthlyAvailability, nil
-}
-
-// Helper functions for calculateAvailability.
-func adjustIncidentPeriod(incidentStart, incidentEnd, periodStart, periodEnd time.Time) (time.Time, time.Time, bool) {
-	if incidentEnd.Before(periodStart) || incidentStart.After(periodEnd) {
-		return time.Time{}, time.Time{}, false
-	}
-	if incidentStart.Before(periodStart) {
-		incidentStart = periodStart
-	}
-	if incidentEnd.After(periodEnd) {
-		incidentEnd = periodEnd
-	}
-	return incidentStart, incidentEnd, true
-}
-
-func minTime(start, end time.Time) time.Time {
-	if start.Before(end) {
-		return start
-	}
-	return end
-}
-
-func maxTime(start, end time.Time) time.Time {
-	if start.After(end) {
-		return start
-	}
-	return end
 }
 
 func hoursInMonth(year int, month int) float64 {
