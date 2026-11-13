@@ -552,3 +552,51 @@ func TestValidateEventCreationTimes(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateEventComponents(t *testing.T) {
+	maximum := make([]int, MaxEventComponents)
+	for i := range maximum {
+		maximum[i] = i + 1
+	}
+
+	tooMany := make([]int, MaxEventComponents+1)
+	for i := range tooMany {
+		tooMany[i] = i + 1
+	}
+
+	tests := []struct {
+		name       string
+		components []int
+		wantErr    error
+	}{
+		{
+			name:       "valid list",
+			components: []int{1, 2, 3},
+		},
+		{
+			name:       "maximum size",
+			components: maximum,
+		},
+		{
+			name:       "too many components",
+			components: tooMany,
+			wantErr:    errors.ErrIncidentComponentsTooMany,
+		},
+		{
+			name:       "duplicate components",
+			components: []int{1, 2, 1},
+			wantErr:    errors.ErrIncidentComponentsDuplicate,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateEventComponents(tc.components)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}

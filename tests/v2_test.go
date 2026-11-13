@@ -827,7 +827,7 @@ func TestV2PostIncidentExtractHandler(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusBadRequest, w.Code)
-	assert.Contains(t, w.Body.String(), "unique")
+	assert.Contains(t, w.Body.String(), "duplicate")
 }
 
 func v2CreateIncident(t *testing.T, r *gin.Engine, inc *v2.IncidentData) *v2.PostIncidentResp {
