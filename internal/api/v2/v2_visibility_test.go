@@ -34,11 +34,9 @@ func TestMapEventUpdates_FiltersInternalStatuses(t *testing.T) {
 		assert.Equal(t, "in_progress", string(updates[1].Status))
 	})
 
-	t.Run("IDs are sequential after filtering", func(t *testing.T) {
+	t.Run("IDs keep the stored row IDs after filtering", func(t *testing.T) {
 		updates, _ := mapEventUpdates(statuses, false, event.MaintenancePlanned, nil, event.TypeMaintenance)
-		for i, u := range updates {
-			assert.Equal(t, i, u.ID)
-		}
+		assert.Equal(t, []int{3, 4}, []int{updates[0].ID, updates[1].ID})
 	})
 }
 
@@ -60,11 +58,9 @@ func TestMapEventUpdates_DescriptionRows(t *testing.T) {
 		assert.Equal(t, "Latest description", description)
 	})
 
-	t.Run("IDs are sequential after description removal", func(t *testing.T) {
+	t.Run("IDs keep the stored row IDs after description removal", func(t *testing.T) {
 		updates, _ := mapEventUpdates(statuses, false, event.MaintenancePlanned, nil, event.TypeMaintenance)
-		for i, u := range updates {
-			assert.Equal(t, i, u.ID)
-		}
+		assert.Equal(t, []int{1, 3}, []int{updates[0].ID, updates[1].ID})
 	})
 
 	t.Run("no description rows returns empty description", func(t *testing.T) {

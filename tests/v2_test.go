@@ -1613,14 +1613,14 @@ func TestV2PatchIncidentUpdateHandler(t *testing.T) {
 	require.Len(t, createResp.Result, 1)
 	incidentID := createResp.Result[0].IncidentID
 
-	// The created incident has one update with index 0
 	initialIncident := v2GetIncident(t, r, incidentID)
 	require.Len(t, initialIncident.Updates, 1)
+	updateID := initialIncident.Updates[0].ID
 
 	testCases := []struct {
 		name           string
 		incidentID     int
-		updateIndex    int
+		updateID       int
 		body           string
 		expectedStatus int
 		expectedBody   string
@@ -1629,14 +1629,14 @@ func TestV2PatchIncidentUpdateHandler(t *testing.T) {
 		{
 			name:           "Successful update",
 			incidentID:     incidentID,
-			updateIndex:    0,
+			updateID:       updateID,
 			body:           `{"text": "The text of this update has been successfully changed."}`,
 			expectedStatus: http.StatusOK,
 			checkResponse: func(t *testing.T, body []byte) {
 				var update v2.EventUpdateData
 				err := json.Unmarshal(body, &update)
 				require.NoError(t, err)
-				assert.Equal(t, 0, update.ID)
+				assert.Equal(t, updateID, update.ID)
 				assert.Equal(t, "The text of this update has been successfully changed.", update.Text)
 				assert.Equal(t, event.IncidentDetected, update.Status)
 			},
@@ -1644,23 +1644,23 @@ func TestV2PatchIncidentUpdateHandler(t *testing.T) {
 		{
 			name:           "Incident not found",
 			incidentID:     99999,
-			updateIndex:    0,
+			updateID:       updateID,
 			body:           `{"text": "This should fail."}`,
 			expectedStatus: http.StatusNotFound,
 			expectedBody:   fmt.Sprintf(`{"errMsg":"%s"}`, apiErrors.ErrIncidentDSNotExist),
 		},
 		{
-			name:           "Update index not found",
+			name:           "Update ID not found",
 			incidentID:     incidentID,
-			updateIndex:    99,
+			updateID:       99999,
 			body:           `{"text": "This should also fail."}`,
 			expectedStatus: http.StatusNotFound,
 			expectedBody:   fmt.Sprintf(`{"errMsg":"%s"}`, apiErrors.ErrUpdateDSNotExist),
 		},
 		{
-			name:           "Invalid update index (negative)",
+			name:           "Invalid update ID (negative)",
 			incidentID:     incidentID,
-			updateIndex:    -1,
+			updateID:       -1,
 			body:           `{"text": "This should also fail."}`,
 			expectedStatus: http.StatusBadRequest,
 			expectedBody:   (`{"errMsg":"Key: 'updateData.UpdateID' Error:Field validation for 'UpdateID' failed on the 'gte' tag"}`),
@@ -1668,7 +1668,7 @@ func TestV2PatchIncidentUpdateHandler(t *testing.T) {
 		{
 			name:           "Empty text in body",
 			incidentID:     incidentID,
-			updateIndex:    0,
+			updateID:       updateID,
 			body:           `{"text": ""}`,
 			expectedStatus: http.StatusBadRequest,
 			expectedBody:   (`{"errMsg":"Key: 'PatchEventUpdateData.Text' Error:Field validation for 'Text' failed on the 'required' tag"}`),
@@ -1676,7 +1676,7 @@ func TestV2PatchIncidentUpdateHandler(t *testing.T) {
 		{
 			name:           "Missing text field in body",
 			incidentID:     incidentID,
-			updateIndex:    0,
+			updateID:       updateID,
 			body:           `{}`,
 			expectedStatus: http.StatusBadRequest,
 			expectedBody:   (`{"errMsg":"Key: 'PatchEventUpdateData.Text' Error:Field validation for 'Text' failed on the 'required' tag"}`),
@@ -1684,7 +1684,7 @@ func TestV2PatchIncidentUpdateHandler(t *testing.T) {
 		{
 			name:           "ff",
 			incidentID:     incidentID,
-			updateIndex:    0,
+			updateID:       updateID,
 			body:           `{"text": "invalid json`,
 			expectedStatus: http.StatusBadRequest,
 			expectedBody:   `{"errMsg":"unexpected EOF"}`,
@@ -1693,7 +1693,7 @@ func TestV2PatchIncidentUpdateHandler(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			url := fmt.Sprintf("/v2/incidents/%d/updates/%d", tc.incidentID, tc.updateIndex)
+			url := fmt.Sprintf("/v2/incidents/%d/updates/%d", tc.incidentID, tc.updateID)
 			req, _ := http.NewRequest(http.MethodPatch, url, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", "Bearer "+adminToken)
