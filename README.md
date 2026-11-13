@@ -43,7 +43,8 @@ is missing or invalid.
 | `SD_STATIC_CACHE_MAX_BYTES` | `67108864` | byte budget of the whole response cache |
 | `SD_NOTIFICATIONS_ENABLED` | `false` | master switch for maintenance email notifications |
 | `SD_SMTP_HOST` / `SD_SMTP_PORT` / `SD_SMTP_FROM` | – | **required** when notifications are enabled |
-| `SD_SMTP_USER` / `SD_SMTP_PASSWORD` / `SD_SMTP_TLS` | – | optional SMTP AUTH and TLS settings |
+| `SD_SMTP_USER` / `SD_SMTP_PASSWORD` | – | optional SMTP AUTH settings |
+| `SD_SMTP_TLS` | `required` | `required`, `opportunistic` or `none`; plaintext is opt-in |
 | `SD_SMTP_TIMEOUT` | `30s` | SMTP connect/send timeout (Go duration) |
 | `SD_NOTIFICATIONS_LEASE_TIMEOUT` | `60s` | must exceed `SD_SMTP_TIMEOUT` |
 | `SD_NOTIFICATIONS_MAX_ATTEMPTS` | `5` | retry limit before a row is marked failed |

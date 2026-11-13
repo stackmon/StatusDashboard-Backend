@@ -30,6 +30,20 @@ const maxBackoff = 2 * time.Hour
 // outage), so without it every retry would hit the recovering server at once.
 const backoffJitter = 0.2
 
+// TLSMode is the SMTP transport security policy.
+type TLSMode string
+
+const (
+	// TLSRequired refuses to send unless the connection is encrypted. It is the default
+	// so a relay that silently drops STARTTLS cannot receive the SMTP credentials.
+	TLSRequired TLSMode = "required"
+	// TLSOpportunistic upgrades to TLS when the relay offers it and falls back to
+	// plaintext otherwise.
+	TLSOpportunistic TLSMode = "opportunistic"
+	// TLSNone sends in plaintext.
+	TLSNone TLSMode = "none"
+)
+
 // Config is the parsed, ready-to-use notification configuration.
 // It is derived from conf.Config once at startup so the hot path never re-parses
 // durations, integers or recipient lists.
@@ -41,7 +55,7 @@ type Config struct {
 	Port     int
 	User     string
 	Password string
-	TLS      bool
+	TLS      TLSMode
 	Timeout  time.Duration
 
 	LeaseTimeout time.Duration
@@ -65,13 +79,18 @@ type Config struct {
 // conf.Validate has already guaranteed the raw values are well-formed when enabled,
 // so parsing here cannot fail for an enabled feature; errors are still surfaced.
 func ConfigFromConf(c *conf.Config) (Config, error) {
+	policy, err := c.SMTP.TLSPolicy()
+	if err != nil {
+		return Config{}, err
+	}
+
 	out := Config{
 		Enabled:         c.Notifications.Enabled,
 		From:            c.SMTP.From,
 		Host:            c.SMTP.Host,
 		User:            c.SMTP.User,
 		Password:        c.SMTP.Password,
-		TLS:             c.SMTP.TLS,
+		TLS:             TLSMode(policy),
 		ReviewSMOD:      strings.TrimSpace(c.Notifications.SmodEmail),
 		ReviewOperators: splitEmails(c.Notifications.EmailsOperators),
 		ReviewAdmins:    splitEmails(c.Notifications.EmailsAdmins),

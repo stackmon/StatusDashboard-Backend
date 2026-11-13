@@ -635,6 +635,17 @@ func TestValidateNotifications(t *testing.T) {
 			errSubstr: "SD_SMTP_FROM",
 		},
 		{
+			name: "unknown smtp tls policy fails",
+			mutate: func(c *Config) {
+				c.Notifications = NotificationsConfig{
+					Enabled: true, LeaseTimeout: "60s", MaxAttempts: "5", BackoffInterval: "5m", SmodEmail: "support@com.com",
+				}
+				c.SMTP = SMTPConfig{Host: "smtp.otc", Port: "587", From: "sd@com.com", TLS: "starttls", Timeout: "30s"}
+			},
+			expectErr: true,
+			errSubstr: "SD_SMTP_TLS",
+		},
+		{
 			name: "smtp port out of range fails",
 			mutate: func(c *Config) {
 				c.Notifications = NotificationsConfig{
@@ -727,6 +738,55 @@ func TestValidateNotifications(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
+		})
+	}
+}
+
+func TestValidateNotifications_NormalizesTLSPolicy(t *testing.T) {
+	for raw, want := range map[string]string{
+		"":      SMTPTLSRequired,
+		"True":  SMTPTLSRequired,
+		"false": SMTPTLSOpportunistic,
+		"none":  SMTPTLSNone,
+	} {
+		c := baseNotifConfig()
+		c.Notifications = NotificationsConfig{
+			Enabled: true, LeaseTimeout: "60s", MaxAttempts: "5", BackoffInterval: "5m",
+			SmodEmail: "support@com.com",
+		}
+		c.SMTP = SMTPConfig{Host: "smtp.otc", Port: "587", From: "sd@com.com", TLS: raw, Timeout: "30s"}
+
+		require.NoError(t, c.Validate(), "policy %q", raw)
+		assert.Equal(t, want, c.SMTP.TLS, "validate must store the effective policy for %q", raw)
+	}
+}
+
+func TestSMTPConfig_TLSPolicy(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    string
+		wantErr bool
+	}{
+		{name: "unset defaults to required", value: "", want: SMTPTLSRequired},
+		{name: "required", value: "required", want: SMTPTLSRequired},
+		{name: "required is case and space insensitive", value: " Required ", want: SMTPTLSRequired},
+		{name: "legacy true means required", value: "true", want: SMTPTLSRequired},
+		{name: "opportunistic", value: "opportunistic", want: SMTPTLSOpportunistic},
+		{name: "legacy false means opportunistic", value: "false", want: SMTPTLSOpportunistic},
+		{name: "none", value: "none", want: SMTPTLSNone},
+		{name: "unknown value is rejected", value: "starttls", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := SMTPConfig{TLS: tt.value}.TLSPolicy()
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

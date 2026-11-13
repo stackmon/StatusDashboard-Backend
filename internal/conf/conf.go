@@ -89,7 +89,9 @@ type SMTPConfig struct {
 	From     string
 	User     string
 	Password string
-	TLS      bool
+	// TLS is the transport security policy: required (default), opportunistic or
+	// none. The boolean forms true/false are still accepted for older deployments.
+	TLS string
 	// Timeout is a Go duration string (e.g. "30s") for the SMTP connect/send.
 	Timeout string
 }
@@ -259,7 +261,36 @@ func (c *Config) validateSMTP() error {
 		return fmt.Errorf("invalid SD_SMTP_FROM %q: %w", c.SMTP.From, err)
 	}
 
+	policy, err := c.SMTP.TLSPolicy()
+	if err != nil {
+		return err
+	}
+	c.SMTP.TLS = policy
+
 	return nil
+}
+
+// SMTP TLS policy values for SMTPConfig.TLS.
+const (
+	SMTPTLSRequired      = "required"
+	SMTPTLSOpportunistic = "opportunistic"
+	SMTPTLSNone          = "none"
+)
+
+// TLSPolicy normalizes the configured SMTP TLS policy. An unset value means required:
+// opportunistic would hand the SMTP credentials to a relay that does not offer
+// STARTTLS, so a missing setting must fail closed rather than downgrade.
+func (s SMTPConfig) TLSPolicy() (string, error) {
+	switch policy := strings.ToLower(strings.TrimSpace(s.TLS)); policy {
+	case "", "true", SMTPTLSRequired:
+		return SMTPTLSRequired, nil
+	case "false", SMTPTLSOpportunistic:
+		return SMTPTLSOpportunistic, nil
+	case SMTPTLSNone:
+		return SMTPTLSNone, nil
+	default:
+		return "", fmt.Errorf("invalid SD_SMTP_TLS %q: use required, opportunistic or none", s.TLS)
+	}
 }
 
 // validateReviewAudience requires at least one review address and rejects malformed
@@ -606,6 +637,6 @@ func (c *Config) Log(logger *zap.Logger) {
 		zap.String("smtp_from", c.SMTP.From),
 		zap.String("smtp_user", c.SMTP.User),
 		zap.String("smtp_password", maskSecret(c.SMTP.Password)),
-		zap.Bool("smtp_tls", c.SMTP.TLS),
+		zap.String("smtp_tls", c.SMTP.TLS),
 	)
 }
