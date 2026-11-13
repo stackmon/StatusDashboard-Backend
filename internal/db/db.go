@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"entgo.io/ent/dialect"
@@ -217,7 +218,12 @@ func (db *DB) GetEventsWithCount(
 	case param.Limit != nil && *param.Limit > 0:
 		query = query.Limit(*param.Limit)
 		if param.Page != nil && *param.Page > 1 {
-			query = query.Offset((*param.Page - 1) * *param.Limit)
+			// Compute in 64 bits: the int product overflows for large pages.
+			offset := int64(*param.Page-1) * int64(*param.Limit)
+			if offset > math.MaxInt {
+				return nil, 0, fmt.Errorf("pagination offset %d exceeds the supported range", offset)
+			}
+			query = query.Offset(int(offset))
 		}
 	case param.LastCount > 0:
 		query = query.Limit(param.LastCount)
