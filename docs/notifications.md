@@ -57,7 +57,10 @@ The creator address (`contact_email` on the event) is subject to:
   from every recipient list, including the review audience. This cannot be bypassed by passing
   the address as `contact_email`.
 
-All addresses are normalised (trimmed, lowercased) and deduplicated before enqueuing.
+All addresses are normalised before enqueuing: a display name (`Name <addr>`) is dropped, case and
+a trailing dot on the domain are ignored, and a `+tag` in the local part is ignored when comparing
+against the exclusion list, the domain allow-list and for deduplication. Delivery keeps the local
+part as written.
 
 ## Triggers
 
@@ -150,7 +153,7 @@ none of the other notification variables are required and the feature is inert.
 | `SD_SMTP_FROM` | – | **Required** when enabled. Sender address, must parse as a valid e-mail. |
 | `SD_SMTP_USER` | – | Optional. SMTP AUTH username. When set, the auth mechanism is auto-discovered. |
 | `SD_SMTP_PASSWORD` | – | Optional. SMTP AUTH password. |
-| `SD_SMTP_TLS` | `false` | `true` enforces mandatory TLS; `false` uses opportunistic TLS (STARTTLS when offered). |
+| `SD_SMTP_TLS` | `required` | `required` enforces TLS and fails when the relay does not offer STARTTLS; `opportunistic` falls back to plaintext; `none` sends in plaintext. The legacy `true`/`false` values map to `required`/`opportunistic`. |
 | `SD_SMTP_TIMEOUT` | `30s` | Go duration string for the SMTP connect/send timeout. |
 
 ### Delivery tuning
@@ -198,7 +201,7 @@ SD_SMTP_PORT=587
 SD_SMTP_FROM=status-dashboard@otc.example.com
 SD_SMTP_USER=sd-mailer
 SD_SMTP_PASSWORD=changeme
-SD_SMTP_TLS=false
+SD_SMTP_TLS=required
 SD_SMTP_TIMEOUT=30s
 
 # Delivery tuning

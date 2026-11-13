@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+
+	entsql "entgo.io/ent/dialect/sql"
 )
 
 // WithAdvisoryLock runs fn while holding a non-blocking session-level advisory
@@ -35,4 +37,12 @@ func (db *DB) WithAdvisoryLock(ctx context.Context, key int64, fn func(context.C
 	}()
 
 	return fn(ctx)
+}
+
+// lockComponentName serializes component creation for one (name, region) pair
+// until the surrounding transaction ends. The key is hashed in Postgres so its
+// length stays constant; a hash collision only makes unrelated inserts wait.
+func lockComponentName(ctx context.Context, raw entsql.ExecQuerier, name, region string) error {
+	_, err := raw.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", name+"|"+region)
+	return err
 }

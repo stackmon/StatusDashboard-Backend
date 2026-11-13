@@ -120,3 +120,21 @@ type NotificationOutbox struct {
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
 }
+
+// Lease is a worker's claim on one outbox row, as returned by ClaimPending. The
+// finalizing methods match the whole lease, so a worker whose row was recovered and
+// reassigned cannot overwrite the outcome of the worker that holds it now.
+type Lease struct {
+	ID       uint
+	Owner    string
+	Attempts int
+}
+
+// Lease returns the claim token for a row returned by ClaimPending.
+func (r NotificationOutbox) Lease() Lease {
+	lease := Lease{ID: r.ID, Attempts: r.Attempts}
+	if r.LockedBy != nil {
+		lease.Owner = *r.LockedBy
+	}
+	return lease
+}

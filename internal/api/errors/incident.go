@@ -15,6 +15,8 @@ var ErrIncidentTypeImpactMismatch = errors.New(
 	"impact must be 0 for type 'maintenance' or 'info' and gt 0 for 'incident'",
 )
 var ErrIncidentInvalidType = errors.New("event type is invalid, must be 'maintenance' 'info' or 'incident'")
+var ErrIncidentComponentsTooMany = errors.New("event components list is too long")
+var ErrIncidentComponentsDuplicate = errors.New("event components list contains duplicate ids")
 
 // Errors for creating incident
 

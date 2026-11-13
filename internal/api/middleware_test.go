@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -577,6 +578,50 @@ func TestCheckEventExistenceMW(t *testing.T) {
 		router.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
+}
+
+func TestValidateComponentsMW(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+
+	tooMany := make([]int, v2.MaxEventComponents+1)
+	for i := range tooMany {
+		tooMany[i] = i + 1
+	}
+
+	tests := []struct {
+		name string
+		body map[string][]int
+	}{
+		{
+			name: "too many components returns 400",
+			body: map[string][]int{"components": tooMany},
+		},
+		{
+			name: "duplicate components returns 400",
+			body: map[string][]int{"components": {1, 2, 1}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			router := gin.New()
+			// Pass nil db - the component list is rejected before the DB call.
+			router.Use(ValidateComponentsMW(nil, logger))
+			router.POST("/events", func(c *gin.Context) {
+				c.Status(http.StatusOK)
+			})
+
+			payload, err := json.Marshal(tc.body)
+			require.NoError(t, err)
+
+			req := httptest.NewRequest(http.MethodPost, "/events", bytes.NewReader(payload))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+		})
+	}
 }
 
 func TestErrorHandle(t *testing.T) {

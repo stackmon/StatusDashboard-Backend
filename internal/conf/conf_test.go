@@ -335,53 +335,46 @@ func TestConfig_Validate_PortValidation(t *testing.T) {
 	}
 }
 
-func TestTrustedProxyList(t *testing.T) {
-	tests := []struct {
-		name      string
-		raw       string
-		expect    []string
-		expectErr bool
-	}{
-		{name: "Empty means no proxy", raw: ""},
-		{name: "Single CIDR", raw: "10.0.0.0/8", expect: []string{"10.0.0.0/8"}},
-		{name: "Single IP", raw: "192.168.1.5", expect: []string{"192.168.1.5"}},
-		{
-			name:   "List with spaces",
-			raw:    " 10.0.0.0/8 , 192.168.1.5 ",
-			expect: []string{"10.0.0.0/8", "192.168.1.5"},
-		},
-		{name: "Hostname is not a network", raw: "ingress", expectErr: true},
-		{name: "Invalid CIDR", raw: "10.0.0.0/33", expectErr: true},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			proxies, err := (&Config{TrustedProxies: tc.raw}).TrustedProxyList()
-			if tc.expectErr {
-				require.Error(t, err)
-				assert.Nil(t, proxies)
-
-				return
-			}
-
-			require.NoError(t, err)
-			assert.Equal(t, tc.expect, proxies)
-		})
-	}
-}
-
-func TestConfig_Validate_RejectsAnInvalidTrustedProxy(t *testing.T) {
-	cfg := Config{
+func TestConfig_Validate_PublicBaseURL(t *testing.T) {
+	base := Config{
 		Port: "8000",
 		OIDC: OIDC{
 			Issuer:   "https://zitadel.example.com",
 			ClientID: "status-dashboard",
 		},
-		RBAC:           RBACConfig{Admins: "admins"},
-		TrustedProxies: "ingress",
+		RBAC: RBACConfig{Admins: "admins"},
 	}
 
-	require.Error(t, cfg.Validate())
+	tests := []struct {
+		name      string
+		baseURL   string
+		expectErr bool
+	}{
+		{name: "Empty is allowed", baseURL: ""},
+		{name: "https URL", baseURL: "https://status.example.com"},
+		{name: "http URL with a path", baseURL: "http://status.example.com/dashboard"},
+		{name: "Missing scheme", baseURL: "status.example.com", expectErr: true},
+		{name: "Unsupported scheme", baseURL: "ftp://status.example.com", expectErr: true},
+		{name: "Query string", baseURL: "https://status.example.com?x=1", expectErr: true},
+		{name: "Fragment", baseURL: "https://status.example.com#top", expectErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base
+			cfg.PublicBaseURL = tc.baseURL
+
+			err := cfg.Validate()
+			if tc.expectErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "SD_PUBLIC_BASE_URL")
+
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestFillDefaults(t *testing.T) {
@@ -422,12 +415,14 @@ func TestSanitizeDBString(t *testing.T) {
 		name   string
 		input  string
 		expect string
+		absent string
 	}{
 		{name: "Empty string", input: "", expect: ""},
 		{
 			name:   "Full connection string strips credentials",
 			input:  "postgresql://user:pass@localhost:5432/mydb",
 			expect: "postgresql://localhost:5432/mydb",
+			absent: "pass",
 		},
 		{
 			name:   "URL without credentials",
@@ -435,17 +430,53 @@ func TestSanitizeDBString(t *testing.T) {
 			expect: "postgresql://localhost:5432/mydb",
 		},
 		{
-			name:   "Invalid URL returns raw string",
+			name:   "Unparsable URL is replaced",
 			input:  "://broken",
-			expect: "://broken",
+			expect: unparsableDSN,
+		},
+		{
+			name:   "Malformed URL is replaced",
+			input:  "postgresql://localhost:5432/my%zzdb",
+			expect: unparsableDSN,
+			absent: "%zz",
+		},
+		{
+			name:   "Key/value DSN is replaced",
+			input:  "host=localhost user=mon sslmode=require dbname=mydb",
+			expect: unparsableDSN,
+			absent: "sslmode",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expect, sanitizeDBString(tc.input))
+			got := sanitizeDBString(tc.input)
+
+			assert.Equal(t, tc.expect, got)
+
+			if tc.absent != "" {
+				assert.NotContains(t, got, tc.absent)
+			}
 		})
 	}
+}
+
+// The storage line of the startup log must never carry the DSN, not even when
+// the DSN cannot be parsed.
+func TestConfig_LogHidesAnUnparsableDSN(t *testing.T) {
+	const dsn = "host=localhost user=mon sslmode=require dbname=mydb"
+
+	core, logs := observer.New(zap.InfoLevel)
+
+	c := &Config{DB: dsn}
+	c.Log(zap.New(core))
+
+	entries := logs.FilterMessage("Storage and logging configuration").All()
+	require.Len(t, entries, 1)
+
+	fields := entries[0].ContextMap()
+	assert.Equal(t, unparsableDSN, fields["db"])
+	assert.NotContains(t, fields["db"], "sslmode")
 }
 
 func TestMergeConfigs(t *testing.T) {
@@ -503,13 +534,15 @@ func TestMergeConfigs(t *testing.T) {
 	t.Run("merges into embedded struct (OIDC)", func(t *testing.T) {
 		c := &Config{}
 		env := map[string]string{
-			"SD_OIDC_ISSUER":    "https://zitadel.example.com",
-			"SD_OIDC_CLIENT_ID": "status-dashboard",
+			"SD_OIDC_ISSUER":     "https://zitadel.example.com",
+			"SD_OIDC_CLIENT_ID":  "status-dashboard",
+			"SD_OIDC_PROJECT_ID": "123456789012345678",
 		}
 		err := mergeConfigs(env, c, "SD")
 		require.NoError(t, err)
 		assert.Equal(t, "https://zitadel.example.com", c.OIDC.Issuer)
 		assert.Equal(t, "status-dashboard", c.OIDC.ClientID)
+		assert.Equal(t, "123456789012345678", c.OIDC.ProjectID)
 	})
 
 	t.Run("merges into embedded struct (Static)", func(t *testing.T) {
@@ -646,6 +679,17 @@ func TestValidateNotifications(t *testing.T) {
 			errSubstr: "SD_SMTP_FROM",
 		},
 		{
+			name: "unknown smtp tls policy fails",
+			mutate: func(c *Config) {
+				c.Notifications = NotificationsConfig{
+					Enabled: true, LeaseTimeout: "60s", MaxAttempts: "5", BackoffInterval: "5m", SmodEmail: "support@com.com",
+				}
+				c.SMTP = SMTPConfig{Host: "smtp.otc", Port: "587", From: "sd@com.com", TLS: "starttls", Timeout: "30s"}
+			},
+			expectErr: true,
+			errSubstr: "SD_SMTP_TLS",
+		},
+		{
 			name: "smtp port out of range fails",
 			mutate: func(c *Config) {
 				c.Notifications = NotificationsConfig{
@@ -742,6 +786,55 @@ func TestValidateNotifications(t *testing.T) {
 	}
 }
 
+func TestValidateNotifications_NormalizesTLSPolicy(t *testing.T) {
+	for raw, want := range map[string]string{
+		"":      SMTPTLSRequired,
+		"True":  SMTPTLSRequired,
+		"false": SMTPTLSOpportunistic,
+		"none":  SMTPTLSNone,
+	} {
+		c := baseNotifConfig()
+		c.Notifications = NotificationsConfig{
+			Enabled: true, LeaseTimeout: "60s", MaxAttempts: "5", BackoffInterval: "5m",
+			SmodEmail: "support@com.com",
+		}
+		c.SMTP = SMTPConfig{Host: "smtp.otc", Port: "587", From: "sd@com.com", TLS: raw, Timeout: "30s"}
+
+		require.NoError(t, c.Validate(), "policy %q", raw)
+		assert.Equal(t, want, c.SMTP.TLS, "validate must store the effective policy for %q", raw)
+	}
+}
+
+func TestSMTPConfig_TLSPolicy(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    string
+		wantErr bool
+	}{
+		{name: "unset defaults to required", value: "", want: SMTPTLSRequired},
+		{name: "required", value: "required", want: SMTPTLSRequired},
+		{name: "required is case and space insensitive", value: " Required ", want: SMTPTLSRequired},
+		{name: "legacy true means required", value: "true", want: SMTPTLSRequired},
+		{name: "opportunistic", value: "opportunistic", want: SMTPTLSOpportunistic},
+		{name: "legacy false means opportunistic", value: "false", want: SMTPTLSOpportunistic},
+		{name: "none", value: "none", want: SMTPTLSNone},
+		{name: "unknown value is rejected", value: "starttls", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := SMTPConfig{TLS: tt.value}.TLSPolicy()
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestFillDefaults_Notifications(t *testing.T) {
 	t.Run("fills notification timing defaults when enabled", func(t *testing.T) {
 		c := &Config{Notifications: NotificationsConfig{Enabled: true}}
@@ -822,4 +915,53 @@ func TestConfig_Log(t *testing.T) {
 		assert.Equal(t, "5m", fields["cache_ttl"])
 		assert.Equal(t, "67108864", fields["cache_max_bytes"])
 	})
+}
+
+func TestTrustedProxyList(t *testing.T) {
+	tests := []struct {
+		name      string
+		raw       string
+		expect    []string
+		expectErr bool
+	}{
+		{name: "Empty means no proxy", raw: ""},
+		{name: "Single CIDR", raw: "10.0.0.0/8", expect: []string{"10.0.0.0/8"}},
+		{name: "Single IP", raw: "192.168.1.5", expect: []string{"192.168.1.5"}},
+		{
+			name:   "List with spaces",
+			raw:    " 10.0.0.0/8 , 192.168.1.5 ",
+			expect: []string{"10.0.0.0/8", "192.168.1.5"},
+		},
+		{name: "Hostname is not a network", raw: "ingress", expectErr: true},
+		{name: "Invalid CIDR", raw: "10.0.0.0/33", expectErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			proxies, err := (&Config{TrustedProxies: tc.raw}).TrustedProxyList()
+			if tc.expectErr {
+				require.Error(t, err)
+				assert.Nil(t, proxies)
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.expect, proxies)
+		})
+	}
+}
+
+func TestConfig_Validate_RejectsAnInvalidTrustedProxy(t *testing.T) {
+	cfg := Config{
+		Port: "8000",
+		OIDC: OIDC{
+			Issuer:   "https://zitadel.example.com",
+			ClientID: "status-dashboard",
+		},
+		RBAC:           RBACConfig{Admins: "admins"},
+		TrustedProxies: "ingress",
+	}
+
+	require.Error(t, cfg.Validate())
 }
