@@ -889,34 +889,31 @@ func (db *DB) ExtractComponentsToNewIncident(
 		Components:  comp,
 	}
 
-	id, err := db.SaveIncident(ctx, inc)
-	if err != nil {
-		return nil, err
-	}
+	err := db.WithTx(ctx, func(tx *Tx) error {
+		if _, saveErr := db.SaveIncidentTx(ctx, tx, inc); saveErr != nil {
+			return saveErr
+		}
 
-	for _, c := range comp {
-		incText := fmt.Sprintf("%s moved from %s", c.PrintAttrs(), incOld.Link())
-		inc.Statuses = append(inc.Statuses, IncidentStatus{
-			IncidentID: id,
-			Status:     event.OutDatedSystem,
-			Text:       incText,
-			Timestamp:  timeNow,
-		})
-	}
+		for _, c := range comp {
+			inc.Statuses = append(inc.Statuses, IncidentStatus{
+				IncidentID: inc.ID,
+				Status:     event.OutDatedSystem,
+				Text:       fmt.Sprintf("%s moved from %s", c.PrintAttrs(), incOld.Link()),
+				Timestamp:  timeNow,
+			})
+		}
 
-	for _, c := range comp {
-		incText := fmt.Sprintf("%s moved to %s", c.PrintAttrs(), inc.Link())
-		incOld.Statuses = append(incOld.Statuses, IncidentStatus{
-			IncidentID: incOld.ID,
-			Status:     event.OutDatedSystem,
-			Text:       incText,
-			Timestamp:  timeNow,
-		})
-	}
+		for _, c := range comp {
+			incOld.Statuses = append(incOld.Statuses, IncidentStatus{
+				IncidentID: incOld.ID,
+				Status:     event.OutDatedSystem,
+				Text:       fmt.Sprintf("%s moved to %s", c.PrintAttrs(), inc.Link()),
+				Timestamp:  timeNow,
+			})
+		}
 
-	// Use a transaction to save both incidents with their statuses and update associations
-	err = db.execWithTx(ctx, nil, func(client *ent.Client, _ entsql.ExecQuerier) error {
-		// Remove component from old incident
+		client := db.clientFor(tx)
+
 		for i := range comp {
 			if comp[i].ID == 0 {
 				continue
