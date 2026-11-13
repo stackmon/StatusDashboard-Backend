@@ -827,7 +827,7 @@ func TestV2PostIncidentExtractHandler(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusBadRequest, w.Code)
-	assert.Contains(t, w.Body.String(), "unique")
+	assert.Contains(t, w.Body.String(), "duplicate")
 }
 
 func v2CreateIncident(t *testing.T, r *gin.Engine, inc *v2.IncidentData) *v2.PostIncidentResp {
@@ -1479,6 +1479,13 @@ func TestV2GetComponentsAvailability(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, availability)
 
+	// Every component reports the full month series, including components
+	// without an incident in the window.
+	for _, compAvail := range availability.Data {
+		assert.NotEmpty(t, compAvail.Availability,
+			"component %d must report its availability months", compAvail.ID)
+	}
+
 	// Test case 2: Check if the availability data is correct
 	// All 3 target months should have exactly 50% availability
 	targetMonths := map[int]bool{
@@ -1505,6 +1512,79 @@ func checkComponentAvailability(t *testing.T, compAvail v2.ComponentAvailability
 				"Availability percentage should be 100% for all months except the target months")
 		}
 	}
+}
+
+func TestV2GetComponentsAvailabilityWindow(t *testing.T) {
+	truncateIncidents(t)
+	r := initTests(t)
+
+	impact := 3
+	system := false
+	now := time.Now().UTC()
+
+	outsideStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, -18, 0)
+	outsideEnd := outsideStart.AddDate(0, 0, 10).Add(12 * time.Hour)
+
+	incData := v2.IncidentData{
+		Title:      "Old outage outside the default window",
+		Impact:     &impact,
+		Components: []int{1},
+		StartDate:  outsideStart,
+		System:     &system,
+		Type:       event.TypeIncident,
+	}
+
+	created := v2CreateIncident(t, r, &incData)
+	require.NotNil(t, created)
+	require.Len(t, created.Result, 1)
+
+	incident := v2GetIncident(t, r, created.Result[0].IncidentID)
+	incident.EndDate = &outsideEnd
+	v2PatchIncident(t, r, incident)
+
+	t.Run("default window ignores incidents outside it", func(t *testing.T) {
+		component := getAvailabilityComponent(t, r, 1, "")
+		require.Len(t, component.Availability, 12)
+
+		for _, month := range component.Availability {
+			assert.InEpsilon(t, 100.0, month.Percentage, 0.0001)
+		}
+	})
+
+	t.Run("custom window includes the incident", func(t *testing.T) {
+		query := fmt.Sprintf("?start_date=%s&end_date=%s",
+			outsideStart.Format(time.RFC3339),
+			outsideEnd.Add(24*time.Hour).Format(time.RFC3339),
+		)
+
+		component := getAvailabilityComponent(t, r, 1, query)
+		require.Len(t, component.Availability, 1)
+		assert.Less(t, component.Availability[0].Percentage, 100.0)
+	})
+}
+
+func getAvailabilityComponent(t *testing.T, r *gin.Engine, componentID int, query string) v2.ComponentAvailability {
+	t.Helper()
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, v2AvailabilityEndpoint+query, nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var availability struct {
+		Data []v2.ComponentAvailability `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &availability))
+
+	for _, component := range availability.Data {
+		if component.ID == componentID {
+			return component
+		}
+	}
+
+	t.Fatalf("component %d is missing from the availability response", componentID)
+	return v2.ComponentAvailability{}
 }
 
 func TestV2PatchIncidentUpdateHandler(t *testing.T) {

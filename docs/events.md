@@ -212,7 +212,9 @@ whose status is not a terminal one (`resolved`, `completed`, `cancelled`, `pendi
 Availability is `100 - downtime / totalHours * 100`, rounded to five decimals, and only counts
 incidents with an impact of exactly `3` (outage) that have an `end_date`. The window is 12 months
 ending with the current one, i.e. it starts on the first day of the month 11 months back; downtime is
-clipped to that window.
+clipped to that window. The optional `start_date` and `end_date` query parameters (RFC3339) narrow or
+shift the window; it may cover at most 12 calendar months. Downtime is aggregated in the database
+over the requested window.
 
 Every component of `GET /v2/components` is reported as
 `{id, name, region, availability: [{year, month, percentage}]}`, with all 12 months listed

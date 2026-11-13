@@ -128,6 +128,9 @@ paths:
       summary: Get availability.
       tags:
         - availability
+      parameters:
+        - $ref: "#/components/parameters/AvailabilityStartDate"
+        - $ref: "#/components/parameters/AvailabilityEndDate"
       responses:
         "200":
           description: Successful operation.
@@ -140,6 +143,12 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/ComponentAvailability"
+        "400":
+          description: Invalid availability window.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BadRequestGeneralError"
   /v2/incidents:
     get:
       deprecated: true
@@ -933,6 +942,24 @@ components:
       schema:
         type: string
         example: "1,5,23"
+    AvailabilityStartDate:
+      name: start_date
+      in: query
+      description: Start of the availability window (RFC3339 format). Defaults to the first day of the month 11 months before the end date.
+      required: false
+      schema:
+        type: string
+        format: date-time
+        example: "2026-01-01T00:00:00Z"
+    AvailabilityEndDate:
+      name: end_date
+      in: query
+      description: End of the availability window (RFC3339 format). Defaults to now. The window is capped at 12 months.
+      required: false
+      schema:
+        type: string
+        format: date-time
+        example: "2026-11-01T00:00:00Z"
     PaginationPage:
       name: page
       in: query
