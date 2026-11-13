@@ -12,6 +12,9 @@ import (
 
 const (
 	maxComponentID = 2048
+	// maxPageNumber bounds the page so the offset computed in the database layer
+	// cannot overflow and absurd pages fail as a bad request.
+	maxPageNumber = 2147483647
 	// MaxEventComponents caps the number of components a single event can
 	// reference; larger lists are rejected to bound incident processing and
 	// notification fan-out.
@@ -64,6 +67,19 @@ func validateAndSetStatus(queryStatus *event.Status, params *db.IncidentsParams)
 		}
 		params.Status = queryStatus
 	}
+	return nil
+}
+
+// validateAndSetPage validates the page number in the pagination query.
+func validateAndSetPage(queryPage *int, params *db.IncidentsParams) error {
+	page := defaultPageNumber
+	if queryPage != nil {
+		if *queryPage < 1 || *queryPage > maxPageNumber {
+			return apiErrors.ErrIncidentFQueryInvalidFormat
+		}
+		page = *queryPage
+	}
+	params.Page = &page
 	return nil
 }
 

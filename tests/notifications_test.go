@@ -159,11 +159,11 @@ func TestMarkSent_UpdatesStatusAndClearsLease(t *testing.T) {
 	require.NoError(t, d.Enqueue(ctx, nil, row))
 	claimed, err := d.ClaimPending(ctx, nil, 10, "pod-1", time.Minute)
 	require.NoError(t, err)
-	id := findClaimedID(t, claimed, row.DedupKey)
+	lease := findClaimed(t, claimed, row.DedupKey).Lease()
 
-	require.NoError(t, d.MarkSent(ctx, nil, id))
+	require.NoError(t, d.MarkSent(ctx, nil, lease))
 
-	stored := fetchRow(t, g, id)
+	stored := fetchRow(t, g, lease.ID)
 	assert.Equal(t, db.NotificationStatusSent, stored.Status)
 	assert.Nil(t, stored.LockedBy)
 	assert.Nil(t, stored.LockedAt)
@@ -173,7 +173,7 @@ func TestMarkSent_UpdatesStatusAndClearsLease(t *testing.T) {
 func TestMarkSent_NotFound(t *testing.T) {
 	ctx := context.Background()
 	d, _ := newNotifDB(t)
-	err := d.MarkSent(ctx, nil, 0)
+	err := d.MarkSent(ctx, nil, db.Lease{})
 	require.ErrorIs(t, err, db.ErrNotificationNotFound)
 }
 
@@ -186,13 +186,13 @@ func TestMarkFailed_RetryWhenAttemptsRemain(t *testing.T) {
 	require.NoError(t, d.Enqueue(ctx, nil, row))
 	claimed, err := d.ClaimPending(ctx, nil, 10, "pod-1", time.Minute)
 	require.NoError(t, err)
-	id := findClaimedID(t, claimed, row.DedupKey) // attempts is now 1
+	lease := findClaimed(t, claimed, row.DedupKey).Lease() // attempts is now 1
 
 	retryAt := time.Now().UTC().Add(5 * time.Minute)
 	backoff := func(_ int) time.Time { return retryAt }
-	require.NoError(t, d.MarkFailed(ctx, nil, id, "smtp timeout", 5, backoff))
+	require.NoError(t, d.MarkFailed(ctx, nil, lease, "smtp timeout", 5, backoff))
 
-	stored := fetchRow(t, g, id)
+	stored := fetchRow(t, g, lease.ID)
 	assert.Equal(t, db.NotificationStatusPending, stored.Status)
 	require.NotNil(t, stored.NextAttemptAt)
 	require.NotNil(t, stored.LastError)
@@ -209,17 +209,57 @@ func TestMarkFailed_FinalWhenAttemptsExhausted(t *testing.T) {
 	require.NoError(t, d.Enqueue(ctx, nil, row))
 	claimed, err := d.ClaimPending(ctx, nil, 10, "pod-1", time.Minute)
 	require.NoError(t, err)
-	id := findClaimedID(t, claimed, row.DedupKey) // attempts is now 1
+	lease := findClaimed(t, claimed, row.DedupKey).Lease() // attempts is now 1
 
 	backoff := func(_ int) time.Time { return time.Now().UTC().Add(time.Minute) }
 	// maxAttempts=1, current attempts=1 -> final failure.
-	require.NoError(t, d.MarkFailed(ctx, nil, id, "permanent", 1, backoff))
+	require.NoError(t, d.MarkFailed(ctx, nil, lease, "permanent", 1, backoff))
 
-	stored := fetchRow(t, g, id)
+	stored := fetchRow(t, g, lease.ID)
 	assert.Equal(t, db.NotificationStatusFailed, stored.Status)
 	assert.Nil(t, stored.NextAttemptAt)
 	require.NotNil(t, stored.LastError)
 	assert.Equal(t, "permanent", *stored.LastError)
+}
+
+func TestFinalize_RejectsLeaseLostToRecovery(t *testing.T) {
+	ctx := context.Background()
+	d, g := newNotifDB(t)
+	incID := seedIncident(t, d)
+
+	row := newOutboxRow(incID, "creator@com.com")
+	require.NoError(t, d.Enqueue(ctx, nil, row))
+	claimed, err := d.ClaimPending(ctx, nil, 10, "pod-1", time.Minute)
+	require.NoError(t, err)
+	old := findClaimed(t, claimed, row.DedupKey).Lease()
+
+	// The send outlives its lease: the row is recovered and handed to another pod.
+	stale := time.Now().UTC().Add(-10 * time.Minute)
+	updateOutbox(t, g, map[string]any{"locked_at": stale}, "id", old.ID)
+	_, err = d.RecoverStaleProcessing(ctx, nil, time.Minute, 5)
+	require.NoError(t, err)
+
+	reclaimed, err := d.ClaimPending(ctx, nil, 10, "pod-2", time.Minute)
+	require.NoError(t, err)
+	fresh := findClaimed(t, reclaimed, row.DedupKey).Lease()
+	require.Equal(t, old.ID, fresh.ID)
+	require.Greater(t, fresh.Attempts, old.Attempts, "re-claim must bump the lease epoch")
+
+	backoff := func(_ int) time.Time { return time.Now().UTC().Add(time.Minute) }
+	require.ErrorIs(t, d.MarkFailed(ctx, nil, old, "smtp timeout", 5, backoff), db.ErrNotificationLeaseLost)
+	require.ErrorIs(t, d.MarkSent(ctx, nil, old), db.ErrNotificationLeaseLost)
+	require.ErrorIs(t, d.MarkFailedTerminal(ctx, nil, old, "permanent"), db.ErrNotificationLeaseLost)
+
+	stored := fetchRow(t, g, fresh.ID)
+	assert.Equal(t, db.NotificationStatusProcessing, stored.Status, "the new owner's row must stay untouched")
+	require.NotNil(t, stored.LockedBy)
+	assert.Equal(t, "pod-2", *stored.LockedBy)
+	assert.Nil(t, stored.LastError)
+
+	require.NoError(t, d.MarkSent(ctx, nil, fresh))
+	stored = fetchRow(t, g, fresh.ID)
+	assert.Equal(t, db.NotificationStatusSent, stored.Status)
+	assert.Nil(t, stored.LockedBy)
 }
 
 func TestRecoverStaleProcessing_ReturnsToPending(t *testing.T) {
@@ -231,7 +271,7 @@ func TestRecoverStaleProcessing_ReturnsToPending(t *testing.T) {
 	require.NoError(t, d.Enqueue(ctx, nil, row))
 	claimed, err := d.ClaimPending(ctx, nil, 10, "pod-1", time.Minute)
 	require.NoError(t, err)
-	id := findClaimedID(t, claimed, row.DedupKey)
+	id := findClaimed(t, claimed, row.DedupKey).ID
 
 	// Simulate a crashed pod: push locked_at far into the past.
 	stale := time.Now().UTC().Add(-10 * time.Minute)
@@ -257,7 +297,7 @@ func TestRecoverStaleProcessing_FinalWhenAttemptsExhausted(t *testing.T) {
 	require.NoError(t, d.Enqueue(ctx, nil, row))
 	claimed, err := d.ClaimPending(ctx, nil, 10, "pod-1", time.Minute)
 	require.NoError(t, err)
-	id := findClaimedID(t, claimed, row.DedupKey) // attempts is now 1
+	id := findClaimed(t, claimed, row.DedupKey).ID // attempts is now 1
 
 	stale := time.Now().UTC().Add(-10 * time.Minute)
 	updateOutbox(t, g, map[string]any{"locked_at": stale}, "id", id)
@@ -271,15 +311,17 @@ func TestRecoverStaleProcessing_FinalWhenAttemptsExhausted(t *testing.T) {
 	assert.Equal(t, db.NotificationStatusFailed, stored.Status)
 }
 
-func findClaimedID(t *testing.T, rows []db.NotificationOutbox, dedupKey string) uint {
+// findClaimed returns the claimed row for a dedup key, carrying the lease that its
+// finalize calls must present.
+func findClaimed(t *testing.T, rows []db.NotificationOutbox, dedupKey string) db.NotificationOutbox {
 	t.Helper()
 	for i := range rows {
 		if rows[i].DedupKey == dedupKey {
-			return rows[i].ID
+			return rows[i]
 		}
 	}
 	require.FailNow(t, "claimed row not found for dedup key: "+dedupKey)
-	return 0
+	return db.NotificationOutbox{}
 }
 
 func containsID(rows []db.NotificationOutbox, id uint) bool {

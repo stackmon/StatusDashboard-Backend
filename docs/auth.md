@@ -38,8 +38,9 @@ sequenceDiagram
 3. **Subject** — a token without `sub` is rejected; `sub` is the user identity (not an e-mail).
 4. **Roles** — role names are read from the Zitadel roles claims: the generic
    `urn:zitadel:iam:org:project:roles` claim, the legacy `groups` claim a service identity
-   carries and any project scoped roles claim; only names configured through `SD_RBAC_ROLES_*`
-   are considered.
+   carries and project scoped roles claims; only names configured through `SD_RBAC_ROLES_*`
+   are considered. When `SD_OIDC_PROJECT_ID` is set, project scoped claims of other projects
+   are ignored, so a role granted in another project of the same tenant cannot be reused.
 5. **Audit logging** — every outcome is logged as `auth_audit` with `action`, `result`, `idp_type`,
    `username` and `reason`, in a SIEM-friendly structure.
 
@@ -65,6 +66,7 @@ OIDC is mandatory — the application fails to start when it is missing or incon
 | `SD_OIDC_ISSUER` | yes | – | validated together with `SD_OIDC_CLIENT_ID`; the discovered issuer must match exactly |
 | `SD_OIDC_CLIENT_ID` | yes | – | the audience accepted in `aud` |
 | `SD_OIDC_USERNAME_CLAIM` | no | – | display name only, never used for identity |
+| `SD_OIDC_PROJECT_ID` | no | – | project scoped role claims must belong to this Zitadel project; unset accepts any project |
 | `SD_RBAC_ROLES_ADMINS` | yes | – | |
 | `SD_RBAC_ROLES_OPERATORS` | no | – | |
 | `SD_RBAC_ROLES_CREATORS` | no | – | |

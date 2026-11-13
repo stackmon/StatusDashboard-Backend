@@ -40,7 +40,9 @@ type Resolver struct {
 func NewResolver(cfg Config) *Resolver {
 	excluded := make(map[string]struct{}, len(cfg.ExcludedEmails))
 	for _, e := range cfg.ExcludedEmails {
-		excluded[normalizeEmail(e)] = struct{}{}
+		if _, key := emailAddress(e); key != "" {
+			excluded[key] = struct{}{}
+		}
 	}
 
 	return &Resolver{
@@ -61,20 +63,22 @@ func (r *Resolver) Recipients(status event.Status, contactEmail string) []string
 	seen := make(map[string]struct{})
 
 	add := func(raw string) {
-		e := normalizeEmail(raw)
-		if e == "" {
+		address, key := emailAddress(raw)
+		if address == "" {
 			return
 		}
-		// Applied here rather than per source, so an exclusion cannot be bypassed
-		// by passing the address as contact_email.
-		if _, blocked := r.excluded[e]; blocked {
+		// Applied here rather than per source, so an exclusion cannot be bypassed by
+		// wrapping the address in a display name or adding a +tag, nor by passing it
+		// as contact_email.
+		if _, blocked := r.excluded[key]; blocked {
 			return
 		}
-		if _, ok := seen[e]; ok {
+		// Aliases of one mailbox are one recipient; delivery uses the first form.
+		if _, ok := seen[key]; ok {
 			return
 		}
-		seen[e] = struct{}{}
-		ordered = append(ordered, e)
+		seen[key] = struct{}{}
+		ordered = append(ordered, address)
 	}
 
 	if isReviewStatus(status) {
@@ -113,13 +117,14 @@ func (r *Resolver) BuildRows(ch Change) []db.NotificationOutbox {
 
 	rows := make([]db.NotificationOutbox, 0, len(recipients))
 	for _, rcpt := range recipients {
+		_, key := emailAddress(rcpt)
 		rows = append(rows, db.NotificationOutbox{
 			Kind:       kind,
 			IncidentID: ch.IncidentID,
 			Recipient:  rcpt,
 			Payload:    payload,
 			ChangeID:   changeID,
-			DedupKey:   DedupKey(ch.IncidentID, kind, ch.OldStatus, ch.NewStatus, rcpt),
+			DedupKey:   DedupKey(ch.IncidentID, kind, ch.OldStatus, ch.NewStatus, key),
 			Status:     db.NotificationStatusPending,
 		})
 	}
