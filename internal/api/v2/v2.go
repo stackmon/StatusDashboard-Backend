@@ -1817,23 +1817,19 @@ func bindAndValidatePatchEventUpdate(c *gin.Context) (int, int, string, error) {
 }
 
 // allowEventUpdatePatch reports whether the caller may rewrite an update of the
-// stored event: its creator while the event is open, or an admin at any time.
+// stored event: an operator or admin at any time, or its creator while the
+// event is open.
 func allowEventUpdatePatch(
 	c *gin.Context, logger *zap.Logger, role rbac.Role, stored *db.Incident,
 ) bool {
-	if role.IsAdmin() {
+	if role.CanApprove() {
 		return true
 	}
 
-	if !role.CanCreate() {
-		logger.Debug("event update patch denied: insufficient role", zap.Int("role", int(role)))
-		apiErrors.RaiseForbiddenErr(c, apiErrors.ErrAuthForbidden)
-		return false
-	}
-
 	userID := getUserIDFromContext(c)
-	if userID == nil || stored.CreatedBy == nil || *userID != *stored.CreatedBy {
-		logger.Debug("event update patch denied: caller is not the event creator",
+	if !role.CanCreate() || userID == nil || stored.CreatedBy == nil || *userID != *stored.CreatedBy {
+		logger.Debug("event update patch denied: caller is neither an operator nor the event creator",
+			zap.Int("role", int(role)),
 			zap.Stringp("user_id", userID),
 			zap.Stringp("created_by", stored.CreatedBy),
 		)

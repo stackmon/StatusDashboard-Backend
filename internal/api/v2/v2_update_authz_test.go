@@ -53,10 +53,18 @@ func TestAllowEventUpdatePatch(t *testing.T) {
 			stored: &db.Incident{CreatedBy: &creator},
 		},
 		{
-			name:   "operator is not the event creator",
+			name:   "operator edits another user's open event",
 			role:   rbac.Operator,
 			userID: &other,
 			stored: &db.Incident{CreatedBy: &creator},
+			allow:  true,
+		},
+		{
+			name:   "operator edits another user's closed event",
+			role:   rbac.Operator,
+			userID: &other,
+			stored: &db.Incident{CreatedBy: &creator, EndDate: &endDate},
+			allow:  true,
 		},
 		{
 			name:   "admin edits another user's open event",
