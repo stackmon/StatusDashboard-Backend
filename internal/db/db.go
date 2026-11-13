@@ -686,35 +686,6 @@ func (db *DB) GetComponentsWithValues(ctx context.Context) ([]Component, error) 
 	return components, nil
 }
 
-func (db *DB) GetComponentsWithIncidents(ctx context.Context) ([]Component, error) {
-	rows, err := db.e.Component.Query().
-		WithAttributes().
-		WithIncidents().
-		All(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	var entIncidents []*ent.Incident
-	for _, row := range rows {
-		entIncidents = append(entIncidents, row.Edges.Incidents...)
-	}
-
-	grouped, err := db.statusesByIncident(ctx, incidentIDs(entIncidents))
-	if err != nil {
-		return nil, err
-	}
-
-	components := make([]Component, 0, len(rows))
-	for _, row := range rows {
-		comp := componentFromEnt(row)
-		attachStatuses(comp.Incidents, grouped)
-		components = append(components, comp)
-	}
-
-	return components, nil
-}
-
 // GetComponentFromNameAttrs returns the Component from its name and region attribute.
 func (db *DB) GetComponentFromNameAttrs(ctx context.Context, name string, attr *ComponentAttr) (*Component, error) {
 	e, err := db.e.Component.Query().
