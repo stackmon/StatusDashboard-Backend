@@ -36,6 +36,7 @@ func (a *API) initV2Routes() {
 		v2API.GET("components", v2.GetComponentsHandler(a.db, a.log))
 		v2API.POST("components",
 			AuthenticationMW(a.authn, a.log),
+			RBACAuthorizationMW(a.rbac, a.log),
 			DenyReporterScopeMW(a.rbac, a.log),
 			v2.PostComponentHandler(a.db, a.log))
 		v2API.GET("components/:id", v2.GetComponentHandler(a.db, a.log))
