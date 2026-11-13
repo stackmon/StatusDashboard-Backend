@@ -3,6 +3,7 @@ package conf
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/mail"
 	"net/url"
 	"reflect"
@@ -61,9 +62,19 @@ type Config struct {
 	// MetricsPort serves /metrics on its own listener so the queue telemetry is not
 	// reachable from the public API port.
 	MetricsPort string `envconfig:"METRICS_PORT"`
+	// TrustedProxies lists the IPs and CIDRs whose X-Forwarded-* headers are
+	// trusted, comma-separated. Empty means no proxy is trusted: the client IP is
+	// the TCP peer and a forwarded header is ignored.
+	// Example: 10.0.0.0/8,192.168.1.5
+	TrustedProxies string `envconfig:"TRUSTED_PROXIES"`
 	// Web URL for the app, used to build maintenance deep links in notifications.
 	// Example: https://web.example.com
 	WebURL string `envconfig:"WEB_URL"`
+	// PublicBaseURL is the absolute URL the API is reachable at. It is the origin
+	// of the absolute links in the RSS feeds when the request carries no forwarded
+	// scheme, i.e. behind an ingress. Empty means the request host is used.
+	// Example: https://status.example.com
+	PublicBaseURL string `envconfig:"PUBLIC_BASE_URL"`
 	// OpenAPISpecPath is the filesystem path to the OpenAPI spec served at
 	// /openapi.json. Defaults to "openapi.yaml" (resolved relative to the
 	// process working directory, matching the container's WORKDIR layout).
@@ -89,7 +100,9 @@ type SMTPConfig struct {
 	From     string
 	User     string
 	Password string
-	TLS      bool
+	// TLS is the transport security policy: required (default), opportunistic or
+	// none. The boolean forms true/false are still accepted for older deployments.
+	TLS string
 	// Timeout is a Go duration string (e.g. "30s") for the SMTP connect/send.
 	Timeout string
 }
@@ -135,6 +148,9 @@ type OIDC struct {
 	Issuer        string `envconfig:"ISSUER"`
 	ClientID      string `envconfig:"CLIENT_ID"`
 	UsernameClaim string `envconfig:"USERNAME_CLAIM"`
+	// ProjectID scopes project role claims to this Zitadel project. Empty keeps
+	// accepting role claims from every project for backwards compatibility.
+	ProjectID string `envconfig:"PROJECT_ID"`
 }
 
 // Static configures the proxy that serves the status dashboard static site from
@@ -162,6 +178,10 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if _, err = c.TrustedProxyList(); err != nil {
+		return err
+	}
+
 	if c.OIDC.Issuer == "" || c.OIDC.ClientID == "" {
 		return fmt.Errorf("SD_OIDC_ISSUER and SD_OIDC_CLIENT_ID are required")
 	}
@@ -176,6 +196,75 @@ func (c *Config) Validate() error {
 
 	if staticErr := c.Static.Validate(); staticErr != nil {
 		return staticErr
+	}
+
+	if baseURLErr := c.validatePublicBaseURL(); baseURLErr != nil {
+		return baseURLErr
+	}
+
+	return nil
+}
+
+// validatePublicBaseURL rejects a value that cannot serve as the origin of an
+// absolute link.
+func (c *Config) validatePublicBaseURL() error {
+	if c.PublicBaseURL == "" {
+		return nil
+	}
+
+	u, err := url.Parse(c.PublicBaseURL)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Errorf(
+			"wrong SD_PUBLIC_BASE_URL %q, expected an absolute http(s) URL such as https://status.example.com",
+			c.PublicBaseURL)
+	}
+
+	if u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("wrong SD_PUBLIC_BASE_URL %q, expected a URL without query or fragment", c.PublicBaseURL)
+	}
+
+	return nil
+}
+
+// TrustedProxyList parses SD_TRUSTED_PROXIES. An empty configuration yields nil,
+// which is what disables forwarded-header trust in the HTTP router.
+func (c *Config) TrustedProxyList() ([]string, error) {
+	fields := strings.Split(c.TrustedProxies, ",")
+
+	proxies := make([]string, 0, len(fields))
+
+	for _, field := range fields {
+		proxy := strings.TrimSpace(field)
+		if proxy == "" {
+			continue
+		}
+
+		if err := validateProxy(proxy); err != nil {
+			return nil, err
+		}
+
+		proxies = append(proxies, proxy)
+	}
+
+	if len(proxies) == 0 {
+		return nil, nil
+	}
+
+	return proxies, nil
+}
+
+// validateProxy rejects an entry that is not a network origin.
+func validateProxy(proxy string) error {
+	if strings.Contains(proxy, "/") {
+		if _, _, err := net.ParseCIDR(proxy); err != nil {
+			return fmt.Errorf("wrong SD_TRUSTED_PROXIES entry %q, expected an IP or CIDR", proxy)
+		}
+
+		return nil
+	}
+
+	if net.ParseIP(proxy) == nil {
+		return fmt.Errorf("wrong SD_TRUSTED_PROXIES entry %q, expected an IP or CIDR", proxy)
 	}
 
 	return nil
@@ -259,7 +348,36 @@ func (c *Config) validateSMTP() error {
 		return fmt.Errorf("invalid SD_SMTP_FROM %q: %w", c.SMTP.From, err)
 	}
 
+	policy, err := c.SMTP.TLSPolicy()
+	if err != nil {
+		return err
+	}
+	c.SMTP.TLS = policy
+
 	return nil
+}
+
+// SMTP TLS policy values for SMTPConfig.TLS.
+const (
+	SMTPTLSRequired      = "required"
+	SMTPTLSOpportunistic = "opportunistic"
+	SMTPTLSNone          = "none"
+)
+
+// TLSPolicy normalizes the configured SMTP TLS policy. An unset value means required:
+// opportunistic would hand the SMTP credentials to a relay that does not offer
+// STARTTLS, so a missing setting must fail closed rather than downgrade.
+func (s SMTPConfig) TLSPolicy() (string, error) {
+	switch policy := strings.ToLower(strings.TrimSpace(s.TLS)); policy {
+	case "", "true", SMTPTLSRequired:
+		return SMTPTLSRequired, nil
+	case "false", SMTPTLSOpportunistic:
+		return SMTPTLSOpportunistic, nil
+	case SMTPTLSNone:
+		return SMTPTLSNone, nil
+	default:
+		return "", fmt.Errorf("invalid SD_SMTP_TLS %q: use required, opportunistic or none", s.TLS)
+	}
 }
 
 // validateReviewAudience requires at least one review address and rejects malformed
@@ -545,14 +663,23 @@ func maskSecret(s string) string {
 	return "<hidden>"
 }
 
+// unparsableDSN replaces a DSN the sanitizer cannot render. A partial parse of a
+// DSN it does not understand can echo the password, so such a value is dropped
+// as a whole.
+const unparsableDSN = "<unparsable dsn>"
+
 func sanitizeDBString(dbURL string) string {
 	if dbURL == "" {
 		return ""
 	}
+
+	// Only a URL-style DSN is rendered, and only without its user info. A
+	// key/value DSN parses without error but keeps the password in the path.
 	u, err := url.Parse(dbURL)
-	if err != nil {
-		return dbURL
+	if err != nil || !strings.Contains(dbURL, "://") {
+		return unparsableDSN
 	}
+
 	return fmt.Sprintf("%s://%s%s",
 		u.Scheme,
 		u.Host,
@@ -565,6 +692,7 @@ func (c *Config) Log(logger *zap.Logger) {
 
 	logger.Info("Endpoint configuration",
 		zap.String("port", c.Port),
+		zap.String("trusted_proxies", c.TrustedProxies),
 	)
 
 	logger.Info("Static site configuration",
@@ -597,6 +725,6 @@ func (c *Config) Log(logger *zap.Logger) {
 		zap.String("smtp_from", c.SMTP.From),
 		zap.String("smtp_user", c.SMTP.User),
 		zap.String("smtp_password", maskSecret(c.SMTP.Password)),
-		zap.Bool("smtp_tls", c.SMTP.TLS),
+		zap.String("smtp_tls", c.SMTP.TLS),
 	)
 }

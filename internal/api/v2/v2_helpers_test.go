@@ -15,15 +15,6 @@ import (
 // handler paths they exercise reject the request before any query runs.
 const unreachableDSN = "postgres://postgres:postgres@127.0.0.1:1/postgres?sslmode=disable"
 
-func getYearAndMonth(year, month, offset int) (int, int) {
-	newMonth := month - offset
-	for newMonth <= 0 {
-		year--
-		newMonth += 12
-	}
-	return year, newMonth
-}
-
 // initRouterWithStoredEvent returns a *gin.Engine with a single PATCH /v2/events/:eventID route
 // that injects the given incident into the gin context (simulating CheckEventExistenceMW) so that
 // PatchIncidentHandler can be exercised without a real database lookup.

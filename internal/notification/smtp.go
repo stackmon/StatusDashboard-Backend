@@ -94,10 +94,16 @@ func isPermanent(err error) bool {
 	return code >= smtpPermanentFrom && code < smtpPermanentTo
 }
 
-// tlsPolicy selects mandatory TLS when configured, otherwise opportunistic.
-func tlsPolicy(enabled bool) mail.TLSPolicy {
-	if enabled {
+// tlsPolicy maps the configured mode to a go-mail policy. An unknown or empty mode
+// falls back to mandatory TLS: failing the send is cheaper than leaking credentials
+// to a relay that does not offer STARTTLS.
+func tlsPolicy(mode TLSMode) mail.TLSPolicy {
+	switch mode {
+	case TLSNone:
+		return mail.NoTLS
+	case TLSOpportunistic:
+		return mail.TLSOpportunistic
+	default:
 		return mail.TLSMandatory
 	}
-	return mail.TLSOpportunistic
 }

@@ -3,6 +3,7 @@ package rss
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -11,12 +12,22 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/stackmon/otc-status-dashboard/internal/baseurl"
 	"github.com/stackmon/otc-status-dashboard/internal/db"
 	"github.com/stackmon/otc-status-dashboard/internal/event"
 )
 
 func testTime() time.Time {
 	return time.Date(2026, 11, 5, 10, 30, 0, 0, time.UTC)
+}
+
+func testBaseURL(t *testing.T) *url.URL {
+	t.Helper()
+
+	u, err := url.Parse("https://status.example.com")
+	require.NoError(t, err)
+
+	return u
 }
 
 func componentWithRegion(name, region string) db.Component {
@@ -54,7 +65,7 @@ func TestCreateIncidentFeedItemsNoComponents(t *testing.T) {
 		{Status: event.Status(status), Text: "we are on it", Timestamp: testTime().Add(time.Hour)},
 	}
 
-	items := createIncidentFeedItems(incident, "https://status.example.com")
+	items := createIncidentFeedItems(incident, testBaseURL(t))
 	require.Len(t, items, 2, "main item plus one update (detected is skipped)")
 
 	main := items[0]
@@ -79,7 +90,7 @@ func TestCreateIncidentFeedItemsSingleComponent(t *testing.T) {
 		{Status: event.IncidentFixing, Text: "we are on it", Timestamp: testTime().Add(time.Hour)},
 	}
 
-	items := createIncidentFeedItems(incident, "https://status.example.com")
+	items := createIncidentFeedItems(incident, testBaseURL(t))
 	require.Len(t, items, 2)
 
 	assert.Equal(t, "ECS status changed to Major incident", items[0].Title)
@@ -101,7 +112,7 @@ func TestCreateIncidentFeedItemsMultipleComponents(t *testing.T) {
 		{Status: event.IncidentFixing, Text: "we are on it", Timestamp: testTime().Add(time.Hour)},
 	}
 
-	items := createIncidentFeedItems(incident, "https://status.example.com")
+	items := createIncidentFeedItems(incident, testBaseURL(t))
 	require.Len(t, items, 2)
 
 	assert.Equal(t, "Status change of multiple services to Major incident", items[0].Title)
@@ -124,7 +135,7 @@ func TestCreateMaintenanceFeedItemsNoComponents(t *testing.T) {
 	}
 
 	assert.NotPanics(t, func() {
-		items := createFeedItems(incident, "https://status.example.com")
+		items := createFeedItems(incident, testBaseURL(t))
 		require.NotEmpty(t, items)
 	})
 }
@@ -134,7 +145,7 @@ func TestCreateMaintenanceFeedItemsNoComponents(t *testing.T) {
 func newTestRouter() *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.GET("/rss/", HandleRSS(nil, zap.NewNop()))
+	r.GET("/rss/", HandleRSS(nil, zap.NewNop(), ""))
 	return r
 }
 
@@ -183,8 +194,53 @@ func TestCreateFeedItemsDispatchNoPanicOnEmptyComponents(t *testing.T) {
 			}
 
 			assert.NotPanics(t, func() {
-				createFeedItems(incident, "https://status.example.com")
+				createFeedItems(incident, testBaseURL(t))
 			})
+		})
+	}
+}
+
+// Feed links must be absolute. Behind an ingress the request carries no scheme,
+// so the scheme comes from the forwarded header or from the configured base URL.
+func TestBuildFeedLinks(t *testing.T) {
+	tests := []struct {
+		name       string
+		proto      string
+		configured string
+		expectBase string
+	}{
+		{name: "no forwarded proto", expectBase: "https://status.example.com"},
+		{name: "forwarded proto", proto: "http", expectBase: "http://status.example.com"},
+		{
+			name:       "configured base URL",
+			configured: "https://public.example.com",
+			expectBase: "https://public.example.com",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/v2/rss/?mt=Global", nil)
+			req.Host = "status.example.com"
+			if tc.proto != "" {
+				req.Header.Set("X-Forwarded-Proto", tc.proto)
+			}
+
+			feed := buildFeed("Incidents", baseurl.Resolve(req, tc.configured), req,
+				[]*db.Incident{baseIncident(nil)})
+
+			require.NotNil(t, feed.Link)
+			assert.Equal(t, tc.expectBase+"/v2/rss/?mt=Global", feed.Link.Href)
+
+			require.Len(t, feed.Items, 1)
+			assert.Equal(t, tc.expectBase+"/incidents/42", feed.Items[0].Link.Href)
+
+			for _, link := range []string{feed.Link.Href, feed.Items[0].Link.Href} {
+				u, err := url.Parse(link)
+				require.NoError(t, err)
+				assert.NotEmpty(t, u.Scheme)
+				assert.NotEmpty(t, u.Host)
+			}
 		})
 	}
 }

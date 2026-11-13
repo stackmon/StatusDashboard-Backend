@@ -120,6 +120,26 @@ func TestCalculateCurrentMntStatus(t *testing.T) {
 			history:        &MntStatusHistory{hasPlanned: true},
 			expectedStatus: event.MaintenanceCompleted,
 		},
+		{
+			name:      "Completed before the planned end stays completed",
+			status:    event.MaintenanceInProgress,
+			startDate: past,
+			endDate:   future,
+			history: &MntStatusHistory{
+				hasPlanned: true, hasInProgress: true, hasCompleted: true, latest: event.MaintenanceCompleted,
+			},
+			expectedStatus: event.MaintenanceCompleted,
+		},
+		{
+			name:      "Update after completion reopens the maintenance",
+			status:    event.MaintenanceCompleted,
+			startDate: past,
+			endDate:   recentPast,
+			history: &MntStatusHistory{
+				hasPlanned: true, hasInProgress: true, hasCompleted: true, latest: event.MaintenanceInProgress,
+			},
+			expectedStatus: event.MaintenanceInProgress,
+		},
 	}
 
 	for _, tc := range tests {

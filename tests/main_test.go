@@ -163,6 +163,7 @@ func initRoutesV2(t *testing.T, c *gin.Engine, dbInst *db.DB, authn *auth.Provid
 	v2Api.GET("components", v2.GetComponentsHandler(dbInst, logger))
 	v2Api.POST("components",
 		api.AuthenticationMW(authn, logger),
+		api.RBACAuthorizationMW(rbacSvc, logger),
 		api.DenyReporterScopeMW(rbacSvc, logger),
 		v2.PostComponentHandler(dbInst, logger))
 	v2Api.GET("components/:id", v2.GetComponentHandler(dbInst, logger))

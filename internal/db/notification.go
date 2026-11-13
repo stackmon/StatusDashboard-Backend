@@ -11,6 +11,7 @@ import (
 
 	"github.com/stackmon/otc-status-dashboard/ent"
 	"github.com/stackmon/otc-status-dashboard/ent/notificationoutbox"
+	"github.com/stackmon/otc-status-dashboard/ent/predicate"
 )
 
 const (
@@ -27,6 +28,9 @@ const (
 var (
 	ErrNotificationDuplicate = errors.New("notification: duplicate outbox row")
 	ErrNotificationNotFound  = errors.New("notification: not found")
+	// ErrNotificationLeaseLost reports a finalize that matched no row because the
+	// lease has moved on. The caller must not retry: the row is not its own anymore.
+	ErrNotificationLeaseLost = errors.New("notification: lease lost")
 )
 
 // outboxColumns lists every outbox column in the order selectOutboxRows expects.
@@ -142,11 +146,43 @@ func (db *DB) ClaimPending(
 	return rows, err
 }
 
-// MarkSent marks a row as sent and clears the active lease.
-func (db *DB) MarkSent(ctx context.Context, tx *Tx, id uint) error {
+// leasedWhere restricts an update to a row that is still processing under the given
+// claim. Attempts doubles as a monotonic lease epoch: ClaimPending increments it on
+// every claim, so a recovered row re-claimed by any worker, including this one, no
+// longer matches the old lease.
+func leasedWhere(lease Lease) predicate.NotificationOutbox {
+	return notificationoutbox.And(
+		notificationoutbox.IDEQ(int(lease.ID)),
+		notificationoutbox.StatusEQ(NotificationStatusProcessing),
+		notificationoutbox.LockedByEQ(lease.Owner),
+		notificationoutbox.AttemptsEQ(lease.Attempts),
+	)
+}
+
+// finalizeResult maps an update that matched no row to the reason it missed.
+func finalizeResult(ctx context.Context, c *ent.Client, id uint, affected int) error {
+	if affected > 0 {
+		return nil
+	}
+
+	exists, err := c.NotificationOutbox.Query().
+		Where(notificationoutbox.IDEQ(int(id))).
+		Exist(ctx)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return ErrNotificationLeaseLost
+	}
+
+	return ErrNotificationNotFound
+}
+
+// MarkSent marks the leased row as sent and clears the lease.
+func (db *DB) MarkSent(ctx context.Context, tx *Tx, lease Lease) error {
 	return db.execWithTx(ctx, tx, func(c *ent.Client, _ entsql.ExecQuerier) error {
 		affected, err := c.NotificationOutbox.Update().
-			Where(notificationoutbox.IDEQ(int(id))).
+			Where(leasedWhere(lease)).
 			SetStatus(NotificationStatusSent).
 			ClearLockedBy().
 			ClearLockedAt().
@@ -156,65 +192,47 @@ func (db *DB) MarkSent(ctx context.Context, tx *Tx, id uint) error {
 		if err != nil {
 			return err
 		}
-		if affected == 0 {
-			return ErrNotificationNotFound
-		}
-		return nil
+
+		return finalizeResult(ctx, c, lease.ID, affected)
 	})
-}
-
-// getRowByID loads a single notification row by primary key.
-func (db *DB) getRowByID(ctx context.Context, c *ent.Client, id uint) (*NotificationOutbox, error) {
-	row, err := c.NotificationOutbox.Query().
-		Where(notificationoutbox.IDEQ(int(id))).
-		Only(ctx)
-	if err != nil {
-		if ent.IsNotFound(err) {
-			return nil, ErrNotificationNotFound
-		}
-		return nil, err
-	}
-
-	domain := notificationOutboxFromEnt(row)
-	return &domain, nil
 }
 
 // MarkFailed marks a row as failed or pending with retry metadata.
 // If retries remain, keep status='pending' and set next_attempt_at.
 // Otherwise set status='failed' and last_error.
 func (db *DB) MarkFailed(
-	ctx context.Context, tx *Tx, id uint, errText string, maxAttempts int, backoff func(attempts int) time.Time,
+	ctx context.Context, tx *Tx, lease Lease, errText string, maxAttempts int,
+	backoff func(attempts int) time.Time,
 ) error {
 	return db.execWithTx(ctx, tx, func(c *ent.Client, _ entsql.ExecQuerier) error {
-		row, err := db.getRowByID(ctx, c, id)
-		if err != nil {
-			return err
-		}
-
 		update := c.NotificationOutbox.Update().
-			Where(notificationoutbox.IDEQ(int(id))).
+			Where(leasedWhere(lease)).
 			SetLastError(errText).
 			ClearLockedBy().
 			ClearLockedAt().
 			SetUpdatedAt(time.Now().UTC())
 
-		if row.Attempts >= maxAttempts {
+		if lease.Attempts >= maxAttempts {
 			update.SetStatus(NotificationStatusFailed).ClearNextAttemptAt()
 		} else {
-			update.SetStatus(NotificationStatusPending).SetNextAttemptAt(backoff(row.Attempts))
+			update.SetStatus(NotificationStatusPending).SetNextAttemptAt(backoff(lease.Attempts))
 		}
 
-		_, err = update.Save(ctx)
-		return err
+		affected, err := update.Save(ctx)
+		if err != nil {
+			return err
+		}
+
+		return finalizeResult(ctx, c, lease.ID, affected)
 	})
 }
 
 // MarkFailedTerminal fails a row outright, ignoring the remaining attempts. Used for
 // rejections the server will repeat on every retry, such as an unknown recipient.
-func (db *DB) MarkFailedTerminal(ctx context.Context, tx *Tx, id uint, errText string) error {
+func (db *DB) MarkFailedTerminal(ctx context.Context, tx *Tx, lease Lease, errText string) error {
 	return db.execWithTx(ctx, tx, func(c *ent.Client, _ entsql.ExecQuerier) error {
 		affected, err := c.NotificationOutbox.Update().
-			Where(notificationoutbox.IDEQ(int(id))).
+			Where(leasedWhere(lease)).
 			SetStatus(NotificationStatusFailed).
 			SetLastError(errText).
 			ClearNextAttemptAt().
@@ -225,10 +243,8 @@ func (db *DB) MarkFailedTerminal(ctx context.Context, tx *Tx, id uint, errText s
 		if err != nil {
 			return err
 		}
-		if affected == 0 {
-			return ErrNotificationNotFound
-		}
-		return nil
+
+		return finalizeResult(ctx, c, lease.ID, affected)
 	})
 }
 

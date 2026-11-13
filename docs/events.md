@@ -118,6 +118,9 @@ A background checker runs every two minutes and advances stored events:
   `start_date`, `in_progress` between `start_date` and `end_date`, `completed` after `end_date`.
 * `info` — a `cancelled` status short-circuits, then `planned` / `active` / `completed` follow the
   clock as above.
+* An explicit `completed` status outranks the clock for both types: an event finished before its
+  planned `end_date`, or an `info` event completed without one, stays `completed`. A status recorded
+  after the completion reopens the event.
 * Missed transitions are backfilled: `planned` at `start_date`, `in_progress`/`active` at
   `start_date`, `completed` at `end_date`. A cancelled maintenance only receives the backfilled
   `planned` status if it was `reviewed` or already had `planned`.
@@ -151,7 +154,8 @@ see [auth.md](auth.md).
 
 ### Info
 
-Info events change status without additional restrictions.
+Info events change status without additional restrictions. Completing one that has no `end_date`
+stamps it with `update_date`, mirroring `resolved` for incidents.
 
 ### Update text — `PATCH /v2/events/:eventID/updates/:updateID`
 
@@ -208,7 +212,9 @@ whose status is not a terminal one (`resolved`, `completed`, `cancelled`, `pendi
 Availability is `100 - downtime / totalHours * 100`, rounded to five decimals, and only counts
 incidents with an impact of exactly `3` (outage) that have an `end_date`. The window is 12 months
 ending with the current one, i.e. it starts on the first day of the month 11 months back; downtime is
-clipped to that window.
+clipped to that window. The optional `start_date` and `end_date` query parameters (RFC3339) narrow or
+shift the window; it may cover at most 12 calendar months. Downtime is aggregated in the database
+over the requested window.
 
 Every component of `GET /v2/components` is reported as
 `{id, name, region, availability: [{year, month, percentage}]}`, with all 12 months listed

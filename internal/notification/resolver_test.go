@@ -46,6 +46,47 @@ func TestRecipients_ExcludedAddressesAreDropped(t *testing.T) {
 	assert.Empty(t, got)
 }
 
+func TestRecipients_ExclusionCannotBeBypassedByFormatting(t *testing.T) {
+	r := NewResolver(Config{ExcludedEmails: []string{"ops@com.com"}})
+
+	for _, contact := range []string{
+		"ops@com.com",
+		"OPS@COM.COM",
+		"Ops <ops@com.com>",
+		"ops@com.com.",
+		"ops+alerts@com.com",
+	} {
+		assert.Empty(t, r.Recipients(event.MaintenancePlanned, contact), "contact %q", contact)
+	}
+}
+
+func TestRecipients_ContactEmailFormattingKeepsDeliveryAddress(t *testing.T) {
+	r := NewResolver(Config{AllowedDomains: []string{"example.com"}})
+
+	cases := map[string]string{
+		"Creator <Creator@Example.com>": "creator@example.com",
+		"creator@example.com.":          "creator@example.com",
+		"creator+alerts@example.com":    "creator+alerts@example.com",
+	}
+
+	for raw, want := range cases {
+		assert.Equal(t, []string{want}, r.Recipients(event.MaintenancePlanned, raw), "contact %q", raw)
+	}
+}
+
+func TestRecipients_AllowedDomainCannotBeBypassedByFormatting(t *testing.T) {
+	r := NewResolver(Config{AllowedDomains: []string{"example.com"}})
+
+	for _, contact := range []string{
+		"creator@gmail.com",
+		"Creator <creator@gmail.com>",
+		"creator@gmail.com.",
+		"creator+alerts@gmail.com",
+	} {
+		assert.Empty(t, r.Recipients(event.MaintenancePlanned, contact), "contact %q", contact)
+	}
+}
+
 func TestRecipients_LifecycleStatusesCreatorOnly(t *testing.T) {
 	r := testResolver()
 

@@ -15,6 +15,9 @@ type InfoStatusHistory struct {
 	hasActive    bool
 	hasCompleted bool
 	hasCancelled bool
+	// latest is the status of the last row. Rows are append-only, so it is the
+	// status the event was moved to last.
+	latest event.Status
 }
 
 func (st *InfoStatusHistory) hasStatus(status event.Status) bool {
@@ -43,7 +46,10 @@ func (st *InfoStatusHistory) setStatus(status event.Status) {
 	case event.InfoCancelled:
 		st.hasCancelled = true
 	default:
+		return
 	}
+
+	st.latest = status
 }
 
 func (ch *Checker) CheckInfoEvents(ctx context.Context) error {
@@ -88,18 +94,7 @@ func (ch *Checker) CheckInfoEvents(ctx context.Context) error {
 func calculateInfoStatusHistory(mn *db.Incident) *InfoStatusHistory {
 	sHistory := &InfoStatusHistory{}
 	for _, st := range mn.Statuses {
-		if st.Status == event.InfoPlanned {
-			sHistory.hasPlanned = true
-		}
-		if st.Status == event.InfoActive {
-			sHistory.hasActive = true
-		}
-		if st.Status == event.InfoCompleted {
-			sHistory.hasCompleted = true
-		}
-		if st.Status == event.InfoCancelled {
-			sHistory.hasCancelled = true
-		}
+		sHistory.setStatus(st.Status)
 	}
 
 	return sHistory
@@ -108,6 +103,18 @@ func calculateInfoStatusHistory(mn *db.Incident) *InfoStatusHistory {
 func calculateCurrentInfoStatus(sHistory *InfoStatusHistory, info *db.Incident) event.Status {
 	if sHistory.hasCancelled {
 		return event.InfoCancelled
+	}
+
+	// An explicit completion outranks the clock: an info event may be completed
+	// without an end_date, which the clock below would read as still active.
+	if sHistory.latest == event.InfoCompleted {
+		return event.InfoCompleted
+	}
+
+	// Patching an info event back to an open status does not clear its end date, so
+	// the clock below would close it again; the recorded status wins instead.
+	if sHistory.hasCompleted && (sHistory.latest == event.InfoPlanned || sHistory.latest == event.InfoActive) {
+		return sHistory.latest
 	}
 
 	now := time.Now().UTC()
@@ -161,7 +168,11 @@ func (ch *Checker) fixInfoMissedStatuses(status event.Status, sHistory *InfoStat
 			return
 		}
 		statusText = event.InfoCompletedStatusText()
-		statusTimestamp = *info.EndDate
+		// Completion backfilled without an end date is stamped when it is recorded.
+		statusTimestamp = time.Now().UTC()
+		if info.EndDate != nil {
+			statusTimestamp = *info.EndDate
+		}
 	case event.InfoCancelled:
 		ch.log.Info("fixing the cancelled status for the info event", zap.Uint("infoID", info.ID))
 		ch.fixInfoMissedStatuses(event.InfoPlanned, sHistory, info)
