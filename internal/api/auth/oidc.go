@@ -42,6 +42,9 @@ type ProviderConfig struct {
 	RoleNames []string
 	// UsernameClaim is an optional display name for audit logging, never the identity.
 	UsernameClaim string
+	// ProjectID limits project scoped role claims to this Zitadel project. Empty
+	// keeps accepting role claims from every project.
+	ProjectID string
 }
 
 // Provider verifies tokens issued by Zitadel and extracts identity and project roles.
@@ -49,6 +52,7 @@ type Provider struct {
 	verifier      *oidc.IDTokenVerifier
 	roleNames     map[string]struct{}
 	usernameClaim string
+	projectID     string
 }
 
 // NewProvider discovers the provider metadata and checks that it publishes a
@@ -73,6 +77,7 @@ func NewProvider(ctx context.Context, cfg ProviderConfig) (*Provider, error) {
 		verifier:      oidcProvider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
 		roleNames:     roleNameSet(cfg.RoleNames),
 		usernameClaim: cfg.UsernameClaim,
+		projectID:     cfg.ProjectID,
 	}, nil
 }
 
@@ -97,7 +102,7 @@ func (p *Provider) Verify(ctx context.Context, rawToken string) (*Claims, error)
 		Subject:  token.Subject,
 		Username: stringClaim(payload, p.usernameClaim),
 		Email:    stringClaim(payload, "email"),
-		Roles:    extractRolesFromClaims(payload, p.roleNames),
+		Roles:    extractRolesFromClaims(payload, p.roleNames, p.projectID),
 		Provider: ProviderZitadel,
 	}, nil
 }
@@ -165,17 +170,27 @@ func stringClaim(payload map[string]any, claim string) string {
 	return value
 }
 
-func isProjectRolesClaim(name string) bool {
+// isProjectRolesClaim reports whether the claim belongs to the configured
+// project. An empty projectID accepts any project for backwards compatibility.
+func isProjectRolesClaim(name, projectID string) bool {
 	if !strings.HasPrefix(name, projectRolesClaimPrefix) || !strings.HasSuffix(name, projectRolesClaimSuffix) {
 		return false
 	}
 
-	return len(name) > len(projectRolesClaimPrefix)+len(projectRolesClaimSuffix)
+	claimProjectID := strings.TrimSuffix(
+		strings.TrimPrefix(name, projectRolesClaimPrefix),
+		projectRolesClaimSuffix,
+	)
+	if claimProjectID == "" {
+		return false
+	}
+
+	return projectID == "" || claimProjectID == projectID
 }
 
 // extractRolesFromClaims collects the known role names from the Zitadel roles claims, including any
 // project scoped claim the token carries. Role names appear as keys or as values, hence both are matched.
-func extractRolesFromClaims(payload map[string]any, known map[string]struct{}) []string {
+func extractRolesFromClaims(payload map[string]any, known map[string]struct{}, projectID string) []string {
 	if len(known) == 0 {
 		return []string{}
 	}
@@ -187,7 +202,7 @@ func extractRolesFromClaims(payload map[string]any, known map[string]struct{}) [
 	}
 
 	for name, value := range payload {
-		if isProjectRolesClaim(name) {
+		if isProjectRolesClaim(name, projectID) {
 			collectRoleNames(value, known, found, 0)
 		}
 	}

@@ -20,12 +20,13 @@ import (
 const oidcDiscoveryTimeout = 15 * time.Second
 
 type API struct {
-	r        *gin.Engine
-	db       *db.DB
-	log      *zap.Logger
-	authn    *auth.Provider
-	rbac     *rbac.Service
-	notifier *notification.Publisher
+	r             *gin.Engine
+	db            *db.DB
+	log           *zap.Logger
+	authn         *auth.Provider
+	rbac          *rbac.Service
+	notifier      *notification.Publisher
+	publicBaseURL string
 }
 
 func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
@@ -46,6 +47,13 @@ func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
 	}
 
 	r := gin.New()
+
+	// gin trusts every peer by default, which would let any client pick the
+	// address that is logged for it through X-Forwarded-For.
+	if err = setTrustedProxies(r, cfg); err != nil {
+		return nil, err
+	}
+
 	r.Use(Logger(log), gin.Recovery())
 	r.Use(ErrorHandle())
 	r.Use(SecurityHeaders())
@@ -64,17 +72,33 @@ func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
 	}
 
 	a := &API{
-		r:        r,
-		db:       database,
-		log:      log,
-		authn:    authn,
-		rbac:     rbacService,
-		notifier: notification.NewPublisher(ncfg, database),
+		r:             r,
+		db:            database,
+		log:           log,
+		authn:         authn,
+		rbac:          rbacService,
+		notifier:      notification.NewPublisher(ncfg, database),
+		publicBaseURL: cfg.PublicBaseURL,
 	}
 	if err = a.InitRoutes(cfg.OpenAPISpecPath); err != nil {
 		return nil, fmt.Errorf("init routes: %w", err)
 	}
 	return a, nil
+}
+
+// setTrustedProxies restricts forwarded-header trust to SD_TRUSTED_PROXIES. With
+// no configured proxy no header is trusted and the client IP is the TCP peer.
+func setTrustedProxies(r *gin.Engine, cfg *conf.Config) error {
+	proxies, err := cfg.TrustedProxyList()
+	if err != nil {
+		return err
+	}
+
+	if err = r.SetTrustedProxies(proxies); err != nil {
+		return fmt.Errorf("set trusted proxies: %w", err)
+	}
+
+	return nil
 }
 
 func newAuthProvider(cfg *conf.Config, roleNames []string) (*auth.Provider, error) {
@@ -86,6 +110,7 @@ func newAuthProvider(cfg *conf.Config, roleNames []string) (*auth.Provider, erro
 		ClientID:      cfg.OIDC.ClientID,
 		RoleNames:     roleNames,
 		UsernameClaim: cfg.OIDC.UsernameClaim,
+		ProjectID:     cfg.OIDC.ProjectID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not initialise the OIDC provider: %w", err)

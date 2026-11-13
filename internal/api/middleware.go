@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -20,7 +21,31 @@ import (
 
 const (
 	eventContextKey = "event"
+
+	// maxLogFieldLen bounds the request-controlled text in a log entry. A path or
+	// query string has no length limit, so it would otherwise let a single client
+	// flood the log.
+	maxLogFieldLen = 512
 )
+
+// sanitizeLogString removes the control characters a request can carry into the
+// log through its path, query or user agent, and caps the length.
+func sanitizeLogString(s string) string {
+	s = strings.ToValidUTF8(s, "")
+
+	if len(s) > maxLogFieldLen {
+		// The cap can split a rune, so the truncated tail is checked as well.
+		s = strings.ToValidUTF8(s[:maxLogFieldLen], "")
+	}
+
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+
+		return r
+	}, s)
+}
 
 func ValidateComponentsMW(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -33,6 +58,11 @@ func ValidateComponentsMW(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 
 		if err := c.ShouldBindBodyWithJSON(&components); err != nil {
 			apiErrors.RaiseBadRequestErr(c, fmt.Errorf("%w: %w", apiErrors.ErrComponentInvalidFormat, err))
+			return
+		}
+
+		if err := v2.ValidateEventComponents(components.Components); err != nil {
+			apiErrors.RaiseBadRequestErr(c, err)
 			return
 		}
 
@@ -266,8 +296,8 @@ func ErrorHandle() gin.HandlerFunc {
 func Logger(log *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now().UTC()
-		path := c.Request.URL.Path
-		query := c.Request.URL.RawQuery
+		path := sanitizeLogString(c.Request.URL.Path)
+		query := sanitizeLogString(c.Request.URL.RawQuery)
 
 		c.Next()
 
@@ -279,7 +309,7 @@ func Logger(log *zap.Logger) gin.HandlerFunc {
 			zap.String("method", c.Request.Method),
 			zap.String("path", path),
 			zap.String("ip", c.ClientIP()),
-			zap.String("user-agent", c.Request.UserAgent()),
+			zap.String("user-agent", sanitizeLogString(c.Request.UserAgent())),
 			zap.Duration("latency", latency),
 		}
 
