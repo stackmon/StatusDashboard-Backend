@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"entgo.io/ent/dialect"
@@ -217,7 +218,12 @@ func (db *DB) GetEventsWithCount(
 	case param.Limit != nil && *param.Limit > 0:
 		query = query.Limit(*param.Limit)
 		if param.Page != nil && *param.Page > 1 {
-			query = query.Offset((*param.Page - 1) * *param.Limit)
+			// Compute in 64 bits: the int product overflows for large pages.
+			offset := int64(*param.Page-1) * int64(*param.Limit)
+			if offset > math.MaxInt {
+				return nil, 0, fmt.Errorf("pagination offset %d exceeds the supported range", offset)
+			}
+			query = query.Offset(int(offset))
 		}
 	case param.LastCount > 0:
 		query = query.Limit(param.LastCount)
@@ -702,32 +708,15 @@ func (db *DB) GetComponentFromNameAttrs(ctx context.Context, name string, attr *
 }
 
 func (db *DB) SaveComponent(ctx context.Context, comp *Component) (uint, error) {
-	// Validate required region attribute
 	hasRegion := false
-	for _, attr := range comp.Attrs {
-		if attr.Name == regionAttrName {
+	region := ""
+	for i := range comp.Attrs {
+		if comp.Attrs[i].Name == regionAttrName {
 			hasRegion = true
-
-			// Check if component with same name and region exists
-			exists, err := db.e.Component.Query().
-				Where(
-					component.NameEQ(comp.Name),
-					component.HasAttributesWith(
-						componentattr.NameEQ(regionAttrName),
-						componentattr.ValueEQ(attr.Value),
-					),
-				).
-				Exist(ctx)
-			if err != nil {
-				return 0, err
-			}
-			if exists {
-				return 0, ErrDBComponentExists
-			}
+			region = comp.Attrs[i].Value
 			break
 		}
 	}
-
 	if !hasRegion {
 		return 0, fmt.Errorf("missing required region attribute")
 	}
@@ -740,41 +729,61 @@ func (db *DB) SaveComponent(ctx context.Context, comp *Component) (uint, error) 
 		comp.ModifiedAt = &now
 	}
 
-	tx, err := db.e.Tx(ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	created, err := tx.Component.Create().
-		SetName(comp.Name).
-		SetCreatedAt(*comp.CreatedAt).
-		SetModifiedAt(*comp.ModifiedAt).
-		Save(ctx)
-	if err != nil {
-		_ = tx.Rollback()
-		return 0, err
-	}
-
-	for i := range comp.Attrs {
-		attr, attrErr := tx.ComponentAttr.Create().
-			SetName(comp.Attrs[i].Name).
-			SetValue(comp.Attrs[i].Value).
-			SetComponentID(created.ID).
-			Save(ctx)
-		if attrErr != nil {
-			_ = tx.Rollback()
-			return 0, attrErr
+	var id uint
+	err := db.execWithTx(ctx, nil, func(client *ent.Client, raw entsql.ExecQuerier) error {
+		// The existence check and the insert must hold the same key, otherwise
+		// concurrent callers can both pass the check and create a duplicate.
+		if lockErr := lockComponentName(ctx, raw, comp.Name, region); lockErr != nil {
+			return lockErr
 		}
-		comp.Attrs[i].ID = uint(attr.ID)
-		comp.Attrs[i].ComponentID = uint(created.ID)
-	}
 
-	if err = tx.Commit(); err != nil {
+		exists, err := client.Component.Query().
+			Where(
+				component.NameEQ(comp.Name),
+				component.HasAttributesWith(
+					componentattr.NameEQ(regionAttrName),
+					componentattr.ValueEQ(region),
+				),
+			).
+			Exist(ctx)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return ErrDBComponentExists
+		}
+
+		created, err := client.Component.Create().
+			SetName(comp.Name).
+			SetCreatedAt(*comp.CreatedAt).
+			SetModifiedAt(*comp.ModifiedAt).
+			Save(ctx)
+		if err != nil {
+			return err
+		}
+
+		for i := range comp.Attrs {
+			attr, attrErr := client.ComponentAttr.Create().
+				SetName(comp.Attrs[i].Name).
+				SetValue(comp.Attrs[i].Value).
+				SetComponentID(created.ID).
+				Save(ctx)
+			if attrErr != nil {
+				return attrErr
+			}
+			comp.Attrs[i].ID = uint(attr.ID)
+			comp.Attrs[i].ComponentID = uint(created.ID)
+		}
+
+		id = uint(created.ID)
+		return nil
+	})
+	if err != nil {
 		return 0, err
 	}
 
-	comp.ID = uint(created.ID)
-	return comp.ID, nil
+	comp.ID = id
+	return id, nil
 }
 
 func (db *DB) MoveComponentFromOldToAnotherIncident(
@@ -860,34 +869,31 @@ func (db *DB) ExtractComponentsToNewIncident(
 		Components:  comp,
 	}
 
-	id, err := db.SaveIncident(ctx, inc)
-	if err != nil {
-		return nil, err
-	}
+	err := db.WithTx(ctx, func(tx *Tx) error {
+		if _, saveErr := db.SaveIncidentTx(ctx, tx, inc); saveErr != nil {
+			return saveErr
+		}
 
-	for _, c := range comp {
-		incText := fmt.Sprintf("%s moved from %s", c.PrintAttrs(), incOld.Link())
-		inc.Statuses = append(inc.Statuses, IncidentStatus{
-			IncidentID: id,
-			Status:     event.OutDatedSystem,
-			Text:       incText,
-			Timestamp:  timeNow,
-		})
-	}
+		for _, c := range comp {
+			inc.Statuses = append(inc.Statuses, IncidentStatus{
+				IncidentID: inc.ID,
+				Status:     event.OutDatedSystem,
+				Text:       fmt.Sprintf("%s moved from %s", c.PrintAttrs(), incOld.Link()),
+				Timestamp:  timeNow,
+			})
+		}
 
-	for _, c := range comp {
-		incText := fmt.Sprintf("%s moved to %s", c.PrintAttrs(), inc.Link())
-		incOld.Statuses = append(incOld.Statuses, IncidentStatus{
-			IncidentID: incOld.ID,
-			Status:     event.OutDatedSystem,
-			Text:       incText,
-			Timestamp:  timeNow,
-		})
-	}
+		for _, c := range comp {
+			incOld.Statuses = append(incOld.Statuses, IncidentStatus{
+				IncidentID: incOld.ID,
+				Status:     event.OutDatedSystem,
+				Text:       fmt.Sprintf("%s moved to %s", c.PrintAttrs(), inc.Link()),
+				Timestamp:  timeNow,
+			})
+		}
 
-	// Use a transaction to save both incidents with their statuses and update associations
-	err = db.execWithTx(ctx, nil, func(client *ent.Client, _ entsql.ExecQuerier) error {
-		// Remove component from old incident
+		client := db.clientFor(tx)
+
 		for i := range comp {
 			if comp[i].ID == 0 {
 				continue

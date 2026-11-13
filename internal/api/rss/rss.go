@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	apiErrors "github.com/stackmon/otc-status-dashboard/internal/api/errors"
+	"github.com/stackmon/otc-status-dashboard/internal/baseurl"
 	"github.com/stackmon/otc-status-dashboard/internal/db"
 	"github.com/stackmon/otc-status-dashboard/internal/event"
 )
@@ -26,7 +28,7 @@ var errRSSWrongParams = fmt.Errorf( //nolint:staticcheck
 	"Status Dashboard RSS feed\nPlease read the documentation to\nmake the correct request",
 )
 
-func HandleRSS(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
+func HandleRSS(dbInst *db.DB, logger *zap.Logger, publicBaseURL string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		region := c.Query("mt")
 		componentName := c.Query("srv")
@@ -49,11 +51,10 @@ func HandleRSS(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 			return
 		}
 
-		baseURL := fmt.Sprintf("%s://%s", c.Request.URL.Scheme, c.Request.Host)
+		base := baseurl.Resolve(c.Request, publicBaseURL)
 		params := feedParams{
 			region:        region,
 			componentName: componentName,
-			baseURL:       baseURL,
 		}
 
 		incidents, err := getIncidents(c.Request.Context(), dbInst, logger, params, maxIncidents)
@@ -68,24 +69,7 @@ func HandleRSS(dbInst *db.DB, logger *zap.Logger) gin.HandlerFunc {
 			return
 		}
 
-		feedTitle := prepareTitle(region, componentName)
-
-		feed := &feeds.Feed{
-			Title:       feedTitle,
-			Link:        &feeds.Link{Href: baseURL + "/rss/" + c.Request.URL.RawQuery, Rel: "self"},
-			Description: feedTitle + " - Incidents",
-			Created:     time.Now(),
-		}
-
-		incidents = sortIncidents(incidents)
-		feedItems := make([]*feeds.Item, 0, maxIncidents)
-
-		for _, incident := range incidents {
-			item := createFeedItem(incident, baseURL)
-			feedItems = append(feedItems, item)
-		}
-
-		feed.Items = feedItems
+		feed := buildFeed(prepareTitle(region, componentName), base, c.Request, sortIncidents(incidents))
 
 		rss, err := feed.ToRss()
 		if err != nil {
@@ -112,7 +96,6 @@ func validateRegion(region string) bool {
 type feedParams struct {
 	region        string
 	componentName string
-	baseURL       string
 }
 
 func getIncidents(
@@ -197,10 +180,30 @@ func createFeedContent(incident *db.Incident) string {
 	return content
 }
 
-func createFeedItem(incident *db.Incident, baseURL string) *feeds.Item {
+// buildFeed assembles the feed. Its links are absolute so that a reader keeps
+// working outside the host the feed was fetched from.
+func buildFeed(title string, base *url.URL, req *http.Request, incidents []*db.Incident) *feeds.Feed {
+	feed := &feeds.Feed{
+		Title:       title,
+		Link:        &feeds.Link{Href: baseurl.Self(base, req), Rel: "self"},
+		Description: title + " - Incidents",
+		Created:     time.Now(),
+	}
+
+	feedItems := make([]*feeds.Item, 0, len(incidents))
+	for _, incident := range incidents {
+		feedItems = append(feedItems, createFeedItem(incident, base))
+	}
+
+	feed.Items = feedItems
+
+	return feed
+}
+
+func createFeedItem(incident *db.Incident, base *url.URL) *feeds.Item {
 	item := &feeds.Item{
 		Title:   fmt.Sprintln(*incident.Text),
-		Link:    &feeds.Link{Href: fmt.Sprintf("%s/incidents/%d", baseURL, incident.ID)},
+		Link:    &feeds.Link{Href: baseurl.Link(base, fmt.Sprintf("/incidents/%d", incident.ID))},
 		Created: *incident.StartDate,
 	}
 

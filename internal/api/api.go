@@ -20,12 +20,13 @@ import (
 const oidcDiscoveryTimeout = 15 * time.Second
 
 type API struct {
-	r        *gin.Engine
-	db       *db.DB
-	log      *zap.Logger
-	authn    *auth.Provider
-	rbac     *rbac.Service
-	notifier *notification.Publisher
+	r             *gin.Engine
+	db            *db.DB
+	log           *zap.Logger
+	authn         *auth.Provider
+	rbac          *rbac.Service
+	notifier      *notification.Publisher
+	publicBaseURL string
 }
 
 func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
@@ -64,12 +65,13 @@ func New(cfg *conf.Config, log *zap.Logger, database *db.DB) (*API, error) {
 	}
 
 	a := &API{
-		r:        r,
-		db:       database,
-		log:      log,
-		authn:    authn,
-		rbac:     rbacService,
-		notifier: notification.NewPublisher(ncfg, database),
+		r:             r,
+		db:            database,
+		log:           log,
+		authn:         authn,
+		rbac:          rbacService,
+		notifier:      notification.NewPublisher(ncfg, database),
+		publicBaseURL: cfg.PublicBaseURL,
 	}
 	if err = a.InitRoutes(cfg.OpenAPISpecPath); err != nil {
 		return nil, fmt.Errorf("init routes: %w", err)
@@ -86,6 +88,7 @@ func newAuthProvider(cfg *conf.Config, roleNames []string) (*auth.Provider, erro
 		ClientID:      cfg.OIDC.ClientID,
 		RoleNames:     roleNames,
 		UsernameClaim: cfg.OIDC.UsernameClaim,
+		ProjectID:     cfg.OIDC.ProjectID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not initialise the OIDC provider: %w", err)
